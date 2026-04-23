@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
+import mapboxgl from "mapbox-gl";
+import "mapbox-gl/dist/mapbox-gl.css";
 import {
-  AlertTriangle,
   Ambulance,
   Building2,
   Coins,
@@ -222,7 +222,11 @@ function Badge({
 
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
-const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
+  const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const markerRefs = useRef<mapboxgl.Marker[]>([]);
+  const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 
   useEffect(() => {
     saveGame(game);
@@ -236,17 +240,75 @@ const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
     (incident) => incident.status === "COMPLETE",
   );
 
-  const mapCells = useMemo(() => {
-    const cells: { x: number; y: number }[] = [];
+  const toLngLat = useCallback((x: number, y: number) => {
+    const minLng = -122.5155;
+    const maxLng = -122.355;
+    const minLat = 37.705;
+    const maxLat = 37.81;
 
-    for (let y = 0; y <= 10; y++) {
-      for (let x = 0; x <= 10; x++) {
-        cells.push({ x, y });
-      }
-    }
+    const lng = minLng + (x / 10) * (maxLng - minLng);
+    const lat = maxLat - (y / 10) * (maxLat - minLat);
 
-    return cells;
+    return [lng, lat] as [number, number];
   }, []);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || !mapToken || mapRef.current) return;
+
+    mapboxgl.accessToken = mapToken;
+
+    mapRef.current = new mapboxgl.Map({
+      container: mapContainerRef.current,
+      style: "mapbox://styles/mapbox/dark-v11",
+      center: toLngLat(5, 5),
+      zoom: 10.7,
+      attributionControl: false,
+    });
+
+    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+
+    return () => {
+      markerRefs.current.forEach((marker) => marker.remove());
+      markerRefs.current = [];
+      mapRef.current?.remove();
+      mapRef.current = null;
+    };
+  }, [mapToken, toLngLat]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    markerRefs.current.forEach((marker) => marker.remove());
+    markerRefs.current = [];
+
+    game.stations.forEach((station) => {
+      const el = document.createElement("div");
+      el.className =
+        "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 bg-sky-500 text-[10px] font-black text-white shadow-lg";
+      el.title = station.name;
+      el.textContent = station.type === "FIRE" ? "F" : station.type === "EMS" ? "E" : "P";
+
+      const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+        .setLngLat(toLngLat(station.x, station.y))
+        .addTo(mapRef.current!);
+
+      markerRefs.current.push(marker);
+    });
+
+    activeIncidents.forEach((incident) => {
+      const el = document.createElement("div");
+      el.className =
+        "flex h-6 w-6 items-center justify-center rounded-full border-2 border-slate-950 bg-rose-500 text-white shadow-lg";
+      el.title = incident.title;
+      el.innerHTML = "⚠";
+
+      const marker = new mapboxgl.Marker({ element: el, anchor: "center" })
+        .setLngLat(toLngLat(incident.x, incident.y))
+        .addTo(mapRef.current!);
+
+      markerRefs.current.push(marker);
+    });
+  }, [activeIncidents, game.stations, toLngLat]);
 
   function spawnIncident() {
     setGame((current) => {
@@ -545,60 +607,20 @@ const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
             <CardContent className="p-4">
               <div className="mb-3 flex items-center justify-between">
                 <h2 className="text-xl font-bold">City Grid</h2>
-                <span className="text-xs text-slate-400">
-                  Prototype map — real map later
-                </span>
+                <span className="text-xs text-slate-400">Mapbox live map</span>
               </div>
 
-              <div className="grid grid-cols-11 gap-1 rounded-2xl bg-slate-950 p-2">
-                {mapCells.map((cell) => {
-                  const station = game.stations.find(
-                    (s) => s.x === cell.x && s.y === cell.y,
-                  );
-
-                  const incident = activeIncidents.find(
-                    (i) => i.x === cell.x && i.y === cell.y,
-                  );
-
-                  const StationIcon = station
-                    ? STATION_TYPES[station.type].icon
-                    : null;
-
-                  return (
-                    <div
-                      key={`${cell.x}-${cell.y}`}
-                      className="relative aspect-square rounded-lg border border-slate-800 bg-slate-900"
-                    >
-                      {station && StationIcon && (
-                        <div
-                          title={station.name}
-                          className="absolute inset-1 flex items-center justify-center rounded-md bg-slate-700 text-white"
-                        >
-                          <StationIcon className="h-4 w-4" />
-                        </div>
-                      )}
-
-                      {incident && (
-                        <motion.div
-                          initial={{ scale: 0.7, opacity: 0.5 }}
-                          animate={{
-                            scale: [0.8, 1.05, 0.8],
-                            opacity: [0.8, 1, 0.8],
-                          }}
-                          transition={{
-                            repeat: Infinity,
-                            duration: 1.2,
-                          }}
-                          title={incident.title}
-                          className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-white shadow-lg"
-                        >
-                          <AlertTriangle className="h-3 w-3" />
-                        </motion.div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+              {mapToken ? (
+                <div
+                  ref={mapContainerRef}
+                  className="h-[460px] w-full rounded-2xl border border-slate-800"
+                />
+              ) : (
+                <div className="rounded-2xl border border-amber-700 bg-amber-900/30 p-4 text-sm text-amber-100">
+                  Add <code>VITE_MAPBOX_TOKEN</code> in your <code>.env</code>{" "}
+                  file to enable the live map.
+                </div>
+              )}
             </CardContent>
           </Card>
 
