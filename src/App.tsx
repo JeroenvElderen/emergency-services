@@ -180,6 +180,32 @@ const INCIDENT_TEMPLATES = [
   stages: IncidentStage[];
 }[];
 
+const STARTER_INCIDENT_TEMPLATES = [
+  {
+    title: "Small Kitchen Fire",
+    category: "FIRE",
+    baseReward: 120,
+    stages: [{ label: "Initial Attack", required: ["ENGINE"] }],
+  },
+  {
+    title: "Medical Emergency",
+    category: "EMS",
+    baseReward: 120,
+    stages: [{ label: "Patient Care", required: ["AMBULANCE"] }],
+  },
+  {
+    title: "Public Disturbance",
+    category: "POLICE",
+    baseReward: 120,
+    stages: [{ label: "On-scene Response", required: ["PATROL"] }],
+  },
+] satisfies {
+  title: string;
+  category: IncidentCategory;
+  baseReward: number;
+  stages: IncidentStage[];
+}[];
+
 const initialState: GameState = {
   credits: 900,
   employees: 10,
@@ -211,7 +237,8 @@ function haversineKm(
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function stationCapacity(_level: number) {
+function stationCapacity(level: number) {
+  void level;
   return 2;
 }
 
@@ -341,9 +368,31 @@ function formatSeconds(seconds: number) {
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
+function nudgePointToward(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  meters = 40,
+) {
+  const dLat = to.lat - from.lat;
+  const dLng = to.lng - from.lng;
+  const length = Math.hypot(dLat, dLng);
+  if (length === 0) return [from.lng, from.lat] as [number, number];
+
+  const metersPerDegreeLat = 111_320;
+  const metersPerDegreeLng =
+    Math.max(0.0001, Math.cos((from.lat * Math.PI) / 180)) * 111_320;
+  const unitLat = dLat / length;
+  const unitLng = dLng / length;
+  const latOffset = (unitLat * meters) / metersPerDegreeLat;
+  const lngOffset = (unitLng * meters) / metersPerDegreeLng;
+
+  return [from.lng + lngOffset, from.lat + latOffset] as [number, number];
+}
+
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
+  const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -489,6 +538,7 @@ export default function Page() {
       el.title = station.name;
       el.textContent =
         station.type === "FIRE" ? "F" : station.type === "EMS" ? "E" : "P";
+      el.onclick = () => setSelectedStationId(station.id);
 
       stationMarkerRefs.current.push(
         new mapboxgl.Marker({ element: el, anchor: "center" })
@@ -552,14 +602,25 @@ export default function Page() {
     });
   }, [activeIncidents, game.incidents, game.stations, game.vehicles]);
 
+  const chooseIncidentTemplates = useCallback((state: GameState) => {
+    if (state.stations.length !== 1) {
+      return INCIDENT_TEMPLATES.filter(
+        (template) => state.resolvedCount >= template.unlockAt,
+      );
+    }
+
+    const availableTypes = new Set(state.vehicles.map((vehicle) => vehicle.type));
+    return STARTER_INCIDENT_TEMPLATES.filter((template) =>
+      template.stages[0].required.every((requiredType) => availableTypes.has(requiredType)),
+    );
+  }, []);
+  
   function spawnIncident() {
     setGame((current) => {
       const activeCount = current.incidents.filter(
         (incident) => incident.status !== "COMPLETE",
       ).length;
-      const available = INCIDENT_TEMPLATES.filter(
-        (template) => current.resolvedCount >= template.unlockAt,
-      );
+      const available = chooseIncidentTemplates(current);
       if (available.length === 0 || current.stations.length === 0 || activeCount >= 2) return current;
 
       const station = current.stations[rand(0, current.stations.length - 1)];
@@ -605,6 +666,11 @@ export default function Page() {
     const speed = VEHICLE_TYPES[vehicle.type].speedKmh;
     const eta = Math.max(8, Math.round((km / speed) * 3600));
 
+    const roadStart = nudgePointToward(station, incident);
+    const roadRoute = route
+      ? ([roadStart, ...route.coordinates.slice(1)] as [number, number][])
+      : null;
+
     setGame((current) => {
       const vehicle = current.vehicles.find((v) => v.id === vehicleId);
       const incident = current.incidents.find((i) => i.id === incidentId);
@@ -625,9 +691,9 @@ export default function Page() {
                 totalEta: eta,
                 incidentId,
                 route:
-                  route?.coordinates ??
+                  roadRoute ??
                   [
-                    [station.lng, station.lat],
+                    roadStart,
                     [incident.lng, incident.lat],
                   ],
               }
@@ -830,9 +896,12 @@ export default function Page() {
         }
 
         if (shouldSpawn) {
-          const available = INCIDENT_TEMPLATES.filter(
-            (template) => nextResolvedCount >= template.unlockAt,
-          );
+          const available = chooseIncidentTemplates({
+            ...current,
+            resolvedCount: nextResolvedCount,
+            incidents: finalIncidents,
+            nextIncidentId,
+          });
           if (available.length > 0) {
             const station = current.stations[rand(0, current.stations.length - 1)];
             const template = available[rand(0, available.length - 1)];
@@ -869,7 +938,7 @@ export default function Page() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [chooseIncidentTemplates]);
 
   const stationUsage = useMemo(() => {
     return Object.fromEntries(
@@ -879,6 +948,23 @@ export default function Page() {
       ]),
     );
   }, [game.stations, game.vehicles]);
+
+  const stationEmployees = useMemo(() => {
+    if (game.stations.length === 0) return {} as Record<number, number>;
+    const base = Math.floor(game.employees / game.stations.length);
+    const remainder = game.employees % game.stations.length;
+
+    return Object.fromEntries(
+      game.stations.map((station, index) => [
+        station.id,
+        base + (index < remainder ? 1 : 0),
+      ]),
+    );
+  }, [game.employees, game.stations]);
+
+  const selectedStation =
+    (selectedStationId && game.stations.find((station) => station.id === selectedStationId)) ??
+    null;
 
   return (
     <main className="min-h-screen bg-[#0b1727] p-4 text-slate-100">
@@ -1158,12 +1244,38 @@ export default function Page() {
                         >
                           Upgrade {upgradeCost}
                         </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setSelectedStationId(station.id)}
+                        >
+                          Open
+                        </Button>
                       </div>
                     </div>
                   );
                 })}
               </div>
 
+              {selectedStation && (
+                <div className="rounded-2xl border border-sky-700/60 bg-sky-950/40 p-3">
+                  <h3 className="font-semibold">{selectedStation.name} Overview</h3>
+                  <p className="text-xs text-slate-300">
+                    Employees: {stationEmployees[selectedStation.id] ?? 0}
+                  </p>
+                  <p className="mt-2 text-xs font-semibold text-slate-200">Vehicles</p>
+                  <div className="mt-1 space-y-1">
+                    {game.vehicles
+                      .filter((vehicle) => vehicle.stationId === selectedStation.id)
+                      .map((vehicle) => (
+                        <p key={vehicle.id} className="text-xs text-slate-300">
+                          {vehicle.name} • {vehicle.status}
+                        </p>
+                      ))}
+                  </div>
+                </div>
+              )}
+              
               <div className="mt-4 space-y-2">
                 {game.log.map((entry, index) => (
                   <p
