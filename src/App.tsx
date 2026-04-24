@@ -445,25 +445,79 @@ export default function Page() {
       const assigned = incident.assignedVehicleIds
         .map((id) => game.vehicles.find((vehicle) => vehicle.id === id))
         .filter((vehicle): vehicle is Vehicle => Boolean(vehicle));
+      const currentStage = incident.stages[incident.currentStage];
 
-      const travelProgress =
+      const etaProgress =
         assigned.length === 0
           ? 0
           : assigned.reduce((sum, vehicle) => {
+              if (vehicle.status !== "DISPATCHED") return sum + 1;
               if (vehicle.totalEta <= 0) return sum + 1;
               return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
             }, 0) / assigned.length;
-      const workProgress =
+      
+      const currentStageProgress =
         incident.stageWorkTotal <= 0
-          ? 0
+          ? 1
           : 1 - Math.max(incident.stageWorkRemaining, 0) / incident.stageWorkTotal;
-      const filingProgress =
-        incident.filingTotal <= 0
+      const missionStageProgress =
+        incident.stages.length === 0
+          ? 1
+          : Math.min(
+              1,
+              (incident.currentStage + Math.max(0, currentStageProgress)) /
+                incident.stages.length,
+            );
+
+      const returnProgress =
+        assigned.length === 0
           ? 0
+          : assigned.reduce((sum, vehicle) => {
+              if (vehicle.status === "AVAILABLE") return sum + 1;
+              if (vehicle.status !== "RETURNING") return sum;
+              if (vehicle.totalEta <= 0) return sum + 1;
+              return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
+            }, 0) / assigned.length;
+
+          const filingProgress =
+        incident.filingTotal <= 0
+          ? 1
           : 1 - Math.max(incident.filingRemaining, 0) / incident.filingTotal;
 
-      const weighted = travelProgress * 0.45 + workProgress * 0.35 + filingProgress * 0.2;
-      return Math.max(0, Math.min(1, weighted));
+      const overall = Math.max(
+        0,
+        Math.min(
+          1,
+          (etaProgress + missionStageProgress + returnProgress + filingProgress) / 4,
+        ),
+      );
+
+      const atScene =
+        !!currentStage &&
+        currentStage.required.every((requiredType) =>
+          assigned.some(
+            (vehicle) =>
+              vehicle.type === requiredType &&
+              vehicle.status === "DISPATCHED" &&
+              vehicle.eta <= 0,
+          ),
+        );
+      const hasVehicleOnWay = assigned.some(
+        (vehicle) => vehicle.status === "DISPATCHED" && vehicle.eta > 0,
+      );
+
+      return {
+        overall,
+        eta: etaProgress,
+        mission: missionStageProgress,
+        returnTrip: returnProgress,
+        filing: filingProgress,
+        colorClass: hasVehicleOnWay
+          ? "bg-amber-500"
+          : atScene
+            ? "bg-emerald-500"
+            : "bg-sky-500",
+      };
     },
     [game.vehicles],
   );
@@ -1286,6 +1340,7 @@ export default function Page() {
         ) : (
           activeIncidents.map((incident) => {
             const stage = incident.stages[incident.currentStage];
+            const progress = missionProgress(incident);
             return (
               <div key={incident.id} className="rounded-xl border border-slate-700 bg-slate-900/90 p-2">
                 <div className="flex items-start justify-between gap-2">
@@ -1298,14 +1353,20 @@ export default function Page() {
                 <div className="mt-2">
                   <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
                     <span>Mission progress</span>
-                    <span>{Math.round(missionProgress(incident) * 100)}%</span>
+                    <span>{Math.round(progress.overall * 100)}%</span>
                   </div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
                     <div
-                      className="h-full bg-emerald-500 transition-all"
-                      style={{ width: `${Math.round(missionProgress(incident) * 100)}%` }}
+                      className={`h-full transition-all ${progress.colorClass}`}
+                      style={{ width: `${Math.round(progress.overall * 100)}%` }}
                     />
                   </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-slate-300">
+                  <span>1) ETA: {Math.round(progress.eta * 100)}%</span>
+                  <span>2) On scene: {Math.round(progress.mission * 100)}%</span>
+                  <span>3) ETA back: {Math.round(progress.returnTrip * 100)}%</span>
+                  <span>4) Filing: {Math.round(progress.filing * 100)}%</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {[...new Set(stage?.required ?? [])].map((type) => {
