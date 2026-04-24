@@ -291,11 +291,11 @@ function Badge({
   tone?: "default" | "good" | "warn" | "bad" | "blue";
 }) {
   const tones = {
-    default: "bg-slate-100 text-slate-700 border-slate-200",
-    good: "bg-emerald-100 text-emerald-700 border-emerald-200",
-    warn: "bg-amber-100 text-amber-800 border-amber-200",
-    bad: "bg-rose-100 text-rose-700 border-rose-200",
-    blue: "bg-sky-100 text-sky-700 border-sky-200",
+    default: "bg-slate-700/40 text-slate-200 border-slate-500/50",
+    good: "bg-emerald-600/20 text-emerald-300 border-emerald-500/40",
+    warn: "bg-amber-500/20 text-amber-200 border-amber-400/40",
+    bad: "bg-rose-500/20 text-rose-200 border-rose-400/40",
+    blue: "bg-sky-500/20 text-sky-200 border-sky-400/40",
   };
 
   return (
@@ -312,6 +312,12 @@ const categoryColor: Record<IncidentCategory, string> = {
   EMS: "bg-emerald-500",
   POLICE: "bg-sky-500",
 };
+
+function formatSeconds(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.max(0, seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
 
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
@@ -784,9 +790,9 @@ export default function Page() {
   }, [game.stations, game.vehicles]);
 
   return (
-    <main className="min-h-screen bg-slate-950 p-4 text-slate-100">
-      <div className="mx-auto max-w-7xl space-y-4">
-        <header className="flex flex-col gap-3 rounded-3xl border border-slate-800 bg-slate-900/80 p-5 shadow-2xl md:flex-row md:items-center md:justify-between">
+    <main className="min-h-screen bg-[#0b1727] p-4 text-slate-100">
+      <div className="mx-auto max-w-[1450px] space-y-4">
+        <header className="flex flex-col gap-3 rounded-2xl border border-[#2b3b52] bg-[#12233a] p-5 shadow-2xl md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-black tracking-tight">Emergency Services</h1>
             <p className="text-sm text-slate-400">
@@ -802,12 +808,12 @@ export default function Page() {
 
             <Badge tone="blue">
               <Radio className="mr-1 h-3 w-3" />
-              {activeIncidents.length} active
+              {activeIncidents.length} open calls
             </Badge>
 
-            <Badge>{completedIncidents.length} completed</Badge>
+            <Badge>{completedIncidents.length} closed</Badge>
 
-            <Button onClick={spawnIncident}>Spawn Incident</Button>
+            <Button onClick={spawnIncident}>Create Call</Button>
 
             <Button variant="outline" onClick={resetGame}>
               Reset
@@ -815,9 +821,9 @@ export default function Page() {
           </div>
         </header>
 
-        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
           <Card
-            className={`${isMapFullscreen ? "fixed inset-3 z-50" : ""} border-slate-800 bg-slate-900 text-slate-100`}
+            className={`${isMapFullscreen ? "fixed inset-3 z-50" : ""} border-[#2b3b52] bg-[#12233a] text-slate-100`}
           >
             <CardContent className="p-4">
               <div className="mb-3 flex items-center justify-between">
@@ -834,7 +840,7 @@ export default function Page() {
               {mapToken ? (
                 <div
                   ref={mapContainerRef}
-                  className={`${isMapFullscreen ? "h-[calc(100vh-7rem)]" : "h-[460px]"} w-full rounded-2xl border border-slate-800`}
+                  className={`${isMapFullscreen ? "h-[calc(100vh-7rem)]" : "h-[560px]"} w-full rounded-2xl border border-slate-800`}                
                 />
               ) : (
                 <div className="rounded-2xl border border-amber-700 bg-amber-900/30 p-4 text-sm text-amber-100">
@@ -846,7 +852,7 @@ export default function Page() {
 
           {!isMapFullscreen && (
             <div className="space-y-4">
-              <Card className="border-slate-800 bg-slate-900 text-slate-100">
+              <Card className="border-[#2b3b52] bg-[#12233a] text-slate-100">
                 <CardContent className="space-y-3 p-4">
                   <h2 className="text-xl font-bold">Build</h2>
 
@@ -874,7 +880,7 @@ export default function Page() {
                 </CardContent>
               </Card>
 
-              <Card className="border-slate-800 bg-slate-900 text-slate-100">
+              <Card className="border-[#2b3b52] bg-[#12233a] text-slate-100">
                 <CardContent className="space-y-3 p-4">
                   <h2 className="text-xl font-bold">Buy Vehicles</h2>
 
@@ -1006,7 +1012,7 @@ export default function Page() {
                           {vehicle.status}
                         </Badge>
 
-                        {vehicle.eta > 0 && <p className="mt-1 text-xs text-slate-400">ETA {vehicle.eta}s</p>}
+                        {vehicle.eta > 0 && <p className="mt-1 text-xs text-slate-400">ETA {formatSeconds(vehicle.eta)}</p>}
                       </div>
                     </div>
 
