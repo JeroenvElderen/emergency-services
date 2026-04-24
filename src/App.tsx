@@ -172,7 +172,7 @@ const INCIDENT_TEMPLATES = [
     unlockAt: 2,
     baseReward: 180,
     stages: [
-       { label: "Extrication", required: ["ENGINE", "RESCUE"] },
+      { label: "Extrication", required: ["ENGINE", "RESCUE"] },
       { label: "Transport", required: ["AMBULANCE"] },
     ],
   },
@@ -311,11 +311,16 @@ async function fetchRoadRoute(
   });
 
   try {
-    const response = await fetch(`${MAPBOX_DIRECTIONS_BASE_URL}/${path}?${params.toString()}`);
+    const response = await fetch(
+      `${MAPBOX_DIRECTIONS_BASE_URL}/${path}?${params.toString()}`,
+    );
     if (!response.ok) return null;
 
     const data = (await response.json()) as {
-      routes?: { distance: number; geometry?: { coordinates?: [number, number][] } }[];
+      routes?: {
+        distance: number;
+        geometry?: { coordinates?: [number, number][] };
+      }[];
     };
     const route = data.routes?.[0];
     const coordinates = route?.geometry?.coordinates;
@@ -410,7 +415,9 @@ export default function Page() {
   const [buildPickerOpen, setBuildPickerOpen] = useState(false);
   const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
   const [realStations, setRealStations] = useState<RealStationSite[]>([]);
-  const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
+  const [selectedStationId, setSelectedStationId] = useState<number | null>(
+    null,
+  );
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -434,7 +441,8 @@ export default function Page() {
   );
   const hasStarted = game.stations.length > 0;
   const activeVehicleCount = game.vehicles.filter(
-    (vehicle) => vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING",
+    (vehicle) =>
+      vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING",
   ).length;
 
   const completedIncidents = game.incidents.filter(
@@ -456,11 +464,12 @@ export default function Page() {
               if (vehicle.totalEta <= 0) return sum + 1;
               return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
             }, 0) / assigned.length;
-      
+
       const currentStageProgress =
         incident.stageWorkTotal <= 0
           ? 1
-          : 1 - Math.max(incident.stageWorkRemaining, 0) / incident.stageWorkTotal;
+          : 1 -
+            Math.max(incident.stageWorkRemaining, 0) / incident.stageWorkTotal;
       const missionStageProgress =
         incident.stages.length === 0
           ? 1
@@ -480,7 +489,7 @@ export default function Page() {
               return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
             }, 0) / assigned.length;
 
-          const filingProgress =
+      const filingProgress =
         incident.filingTotal <= 0
           ? 1
           : 1 - Math.max(incident.filingRemaining, 0) / incident.filingTotal;
@@ -489,7 +498,11 @@ export default function Page() {
         0,
         Math.min(
           1,
-          (etaProgress + missionStageProgress + returnProgress + filingProgress) / 4,
+          (etaProgress +
+            missionStageProgress +
+            returnProgress +
+            filingProgress) /
+            4,
         ),
       );
 
@@ -620,12 +633,19 @@ export default function Page() {
       if (!response.ok) return;
 
       const data = (await response.json()) as {
-        elements?: { id: number; lat: number; lon: number; tags?: { name?: string } }[];
+        elements?: {
+          id: number;
+          lat: number;
+          lon: number;
+          tags?: { name?: string };
+        }[];
       };
       const sites =
         data.elements?.slice(0, 25).map((item) => ({
           id: `real-${item.id}`,
-          name: item.tags?.name ?? `${STATION_TYPES[selectedBuild].label} Site ${item.id}`,
+          name:
+            item.tags?.name ??
+            `${STATION_TYPES[selectedBuild].label} Site ${item.id}`,
           type: selectedBuild,
           lat: item.lat,
           lng: item.lon,
@@ -748,7 +768,9 @@ export default function Page() {
       if (!station || !incident) return;
 
       const progress =
-        vehicle.totalEta <= 0 ? 1 : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
+        vehicle.totalEta <= 0
+          ? 1
+          : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
 
@@ -783,33 +805,57 @@ export default function Page() {
       el.title = vehicle.name;
 
       vehicleMarkerRefs.current.set(
-        vehicle.id, new mapboxgl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(mapRef.current!),
+        vehicle.id,
+        new mapboxgl.Marker({ element: el, anchor: "bottom" })
+          .setLngLat([lng, lat])
+          .addTo(mapRef.current!),
       );
 
       if (vehicle.route.length >= 2) {
         const routeId = `vehicle-route-${vehicle.id}`;
-        routeLayerIdsRef.current.push(routeId);
-        mapRef.current?.addSource(routeId, {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: vehicle.route,
+        const addRouteLayer = () => {
+          if (!mapRef.current) return;
+
+          if (mapRef.current.getLayer(routeId)) {
+            mapRef.current.removeLayer(routeId);
+          }
+
+          if (mapRef.current.getSource(routeId)) {
+            mapRef.current.removeSource(routeId);
+          }
+
+          routeLayerIdsRef.current.push(routeId);
+
+          mapRef.current.addSource(routeId, {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: vehicle.route,
+              },
+              properties: {},
             },
-            properties: {},
-          },
-        });
-        mapRef.current?.addLayer({
-          id: routeId,
-          type: "line",
-          source: routeId,
-          paint: {
-            "line-color": vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
-            "line-width": 3,
-            "line-opacity": 0.8,
-          },
-        });
+          });
+
+          mapRef.current.addLayer({
+            id: routeId,
+            type: "line",
+            source: routeId,
+            paint: {
+              "line-color":
+                vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
+              "line-width": 3,
+              "line-opacity": 0.8,
+            },
+          });
+        };
+
+        if (mapRef.current?.isStyleLoaded()) {
+          addRouteLayer();
+        } else {
+          mapRef.current?.once("load", addRouteLayer);
+        }
       }
     });
 
@@ -855,19 +901,28 @@ export default function Page() {
       );
     }
 
-    const availableTypes = new Set(state.vehicles.map((vehicle) => vehicle.type));
+    const availableTypes = new Set(
+      state.vehicles.map((vehicle) => vehicle.type),
+    );
     return STARTER_INCIDENT_TEMPLATES.filter((template) =>
-      template.stages[0].required.every((requiredType) => availableTypes.has(requiredType)),
+      template.stages[0].required.every((requiredType) =>
+        availableTypes.has(requiredType),
+      ),
     );
   }, []);
-  
+
   function spawnIncident() {
     setGame((current) => {
       const activeCount = current.incidents.filter(
         (incident) => incident.status !== "COMPLETE",
       ).length;
       const available = chooseIncidentTemplates(current);
-      if (available.length === 0 || current.stations.length === 0 || activeCount >= 2) return current;
+      if (
+        available.length === 0 ||
+        current.stations.length === 0 ||
+        activeCount >= 2
+      )
+        return current;
 
       const station = current.stations[rand(0, current.stations.length - 1)];
       const template = available[rand(0, available.length - 1)];
@@ -898,7 +953,10 @@ export default function Page() {
         ...current,
         nextIncidentId: current.nextIncidentId + 1,
         incidents: [...current.incidents, incident],
-        log: [`New ${incident.category} incident: ${incident.title}.`, ...current.log].slice(0, 10),
+        log: [
+          `New ${incident.category} incident: ${incident.title}.`,
+          ...current.log,
+        ].slice(0, 10),
       };
     });
   }
@@ -947,12 +1005,7 @@ export default function Page() {
                 eta,
                 totalEta: eta,
                 incidentId,
-                route:
-                  roadRoute ??
-                  [
-                    roadStart,
-                    [incident.lng, incident.lat],
-                  ],
+                route: roadRoute ?? [roadStart, [incident.lng, incident.lat]],
               }
             : v,
         ),
@@ -985,7 +1038,9 @@ export default function Page() {
       ) {
         return current;
       }
-      const used = current.vehicles.filter((v) => v.stationId === station.id).length;
+      const used = current.vehicles.filter(
+        (v) => v.stationId === station.id,
+      ).length;
       if (used >= stationCapacity(station.level)) return current;
 
       const id = current.nextVehicleId;
@@ -1006,7 +1061,10 @@ export default function Page() {
         credits: current.credits - config.cost,
         nextVehicleId: id + 1,
         vehicles: [...current.vehicles, vehicle],
-        log: [`Purchased ${vehicle.name} for ${station.name}.`, ...current.log].slice(0, 10),
+        log: [
+          `Purchased ${vehicle.name} for ${station.name}.`,
+          ...current.log,
+        ].slice(0, 10),
       };
     });
   }
@@ -1024,7 +1082,10 @@ export default function Page() {
         stations: current.stations.map((item) =>
           item.id === stationId ? { ...item, level: item.level + 1 } : item,
         ),
-        log: [`Upgraded ${station.name} to level ${station.level + 1}.`, ...current.log].slice(0, 10),
+        log: [
+          `Upgraded ${station.name} to level ${station.level + 1}.`,
+          ...current.log,
+        ].slice(0, 10),
       };
     });
   }
@@ -1042,7 +1103,8 @@ export default function Page() {
 
         let nextVehicles = current.vehicles.map((vehicle) => {
           if (
-            (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+            (vehicle.status === "DISPATCHED" ||
+              vehicle.status === "RETURNING") &&
             vehicle.eta > 0
           ) {
             return {
@@ -1102,17 +1164,27 @@ export default function Page() {
             const assignedIds = new Set(incident.assignedVehicleIds);
             const anyDispatched = nextVehicles.some(
               (vehicle) =>
-                assignedIds.has(vehicle.id) && vehicle.status === "DISPATCHED" && vehicle.eta <= 0,
+                assignedIds.has(vehicle.id) &&
+                vehicle.status === "DISPATCHED" &&
+                vehicle.eta <= 0,
             );
             if (anyDispatched) {
               nextVehicles = nextVehicles.map((vehicle) => {
-                if (!assignedIds.has(vehicle.id) || vehicle.status !== "DISPATCHED") return vehicle;
-                const station = current.stations.find((s) => s.id === vehicle.stationId);
+                if (
+                  !assignedIds.has(vehicle.id) ||
+                  vehicle.status !== "DISPATCHED"
+                )
+                  return vehicle;
+                const station = current.stations.find(
+                  (s) => s.id === vehicle.stationId,
+                );
                 if (!station) return vehicle;
                 const returnKm = haversineKm(station, incident);
                 const returnEta = Math.max(
                   8,
-                  Math.round((returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600),
+                  Math.round(
+                    (returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600,
+                  ),
                 );
 
                 return {
@@ -1142,7 +1214,9 @@ export default function Page() {
               : incident.filingRemaining;
             if (allBackAtStation && nextFiling === 0) {
               creditsEarned += incident.reward;
-              progressNotes.push(`${incident.title} completed (+${incident.reward}).`);
+              progressNotes.push(
+                `${incident.title} completed (+${incident.reward}).`,
+              );
               return {
                 ...incident,
                 status: "COMPLETE" as IncidentStatus,
@@ -1158,7 +1232,9 @@ export default function Page() {
             };
           }
 
-          progressNotes.push(`${incident.title}: moved to stage ${nextStage + 1}.`);
+          progressNotes.push(
+            `${incident.title}: moved to stage ${nextStage + 1}.`,
+          );
           return {
             ...incident,
             currentStage: nextStage,
@@ -1181,10 +1257,15 @@ export default function Page() {
         let nextCredits = current.credits + creditsEarned;
 
         if (creditsEarned > 0) {
-          nextResolvedCount += nextIncidents.filter((i) => i.status === "COMPLETE").length - current.incidents.filter((i) => i.status === "COMPLETE").length;
+          nextResolvedCount +=
+            nextIncidents.filter((i) => i.status === "COMPLETE").length -
+            current.incidents.filter((i) => i.status === "COMPLETE").length;
         }
 
-        if (current.nextIncidentId > 0 && current.nextIncidentId % MAINTENANCE_INTERVAL === 0) {
+        if (
+          current.nextIncidentId > 0 &&
+          current.nextIncidentId % MAINTENANCE_INTERVAL === 0
+        ) {
           const maintenance = current.vehicles.length * 4;
           nextCredits -= maintenance;
           progressNotes.unshift(`Maintenance costs paid: ${maintenance}.`);
@@ -1198,7 +1279,8 @@ export default function Page() {
             nextIncidentId,
           });
           if (available.length > 0) {
-            const station = current.stations[rand(0, current.stations.length - 1)];
+            const station =
+              current.stations[rand(0, current.stations.length - 1)];
             const template = available[rand(0, available.length - 1)];
             const difficulty = 1 + Math.floor(nextResolvedCount / 3);
             const incident: Incident = {
@@ -1253,7 +1335,8 @@ export default function Page() {
   }, [game.employees, game.stations]);
 
   const selectedStation =
-    (selectedStationId && game.stations.find((station) => station.id === selectedStationId)) ??
+    (selectedStationId &&
+      game.stations.find((station) => station.id === selectedStationId)) ??
     null;
 
   return (
@@ -1262,13 +1345,16 @@ export default function Page() {
         <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
       ) : (
         <div className="absolute left-4 top-4 z-40 max-w-md rounded-xl border border-amber-700 bg-amber-900/80 p-4 text-sm text-amber-100">
-          Add <code>VITE_MAPBOX_TOKEN</code> in your <code>.env</code> file to enable the live map.
+          Add <code>VITE_MAPBOX_TOKEN</code> in your <code>.env</code> file to
+          enable the live map.
         </div>
       )}
 
       <div className="absolute left-3 top-3 z-30 w-[250px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-2.5 shadow-2xl backdrop-blur-sm">
         <div className="flex items-center justify-between">
-          <h1 className="text-sm font-black tracking-tight">Emergency Services</h1>
+          <h1 className="text-sm font-black tracking-tight">
+            Emergency Services
+          </h1>
           <Button
             size="sm"
             className="h-7 w-7 p-0"
@@ -1296,7 +1382,9 @@ export default function Page() {
 
         {buildPickerOpen && (
           <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Buy building</p>
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
+              Buy building
+            </p>
             <div className="flex flex-wrap gap-1.5">
               {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
                 const Icon = STATION_TYPES[type].icon;
@@ -1330,7 +1418,12 @@ export default function Page() {
         )}
 
         <div className="flex gap-1.5">
-          <Button size="sm" className="flex-1" onClick={spawnIncident} disabled={!hasStarted || activeIncidents.length >= 2}>
+          <Button
+            size="sm"
+            className="flex-1"
+            onClick={spawnIncident}
+            disabled={!hasStarted || activeIncidents.length >= 2}
+          >
             Create Call
           </Button>
           <Button size="sm" variant="outline" onClick={resetGame}>
@@ -1339,7 +1432,7 @@ export default function Page() {
         </div>
       </div>
 
-       <div className="absolute bottom-3 right-3 z-30 max-h-[52vh] w-[360px] space-y-2 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
+      <div className="absolute bottom-3 right-3 z-30 max-h-[52vh] w-[360px] space-y-2 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
         <h2 className="text-sm font-bold">Live Incidents</h2>
         {activeIncidents.length === 0 ? (
           <p className="text-xs text-slate-400">No active incidents.</p>
@@ -1348,13 +1441,20 @@ export default function Page() {
             const stage = incident.stages[incident.currentStage];
             const progress = missionProgress(incident);
             return (
-              <div key={incident.id} className="rounded-xl border border-slate-700 bg-slate-900/90 p-2">
+              <div
+                key={incident.id}
+                className="rounded-xl border border-slate-700 bg-slate-900/90 p-2"
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold">{incident.title}</p>
-                    <p className="text-[11px] text-slate-400">{stage?.label} • reward {incident.reward}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {stage?.label} • reward {incident.reward}
+                    </p>
                   </div>
-                  <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>{incident.status}</Badge>
+                  <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>
+                    {incident.status}
+                  </Badge>
                 </div>
                 <div className="mt-2">
                   <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
@@ -1364,20 +1464,27 @@ export default function Page() {
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
                     <div
                       className={`h-full transition-all ${progress.colorClass}`}
-                      style={{ width: `${Math.round(progress.overall * 100)}%` }}
+                      style={{
+                        width: `${Math.round(progress.overall * 100)}%`,
+                      }}
                     />
                   </div>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-slate-300">
                   <span>1) ETA: {Math.round(progress.eta * 100)}%</span>
-                  <span>2) On scene: {Math.round(progress.mission * 100)}%</span>
-                  <span>3) ETA back: {Math.round(progress.returnTrip * 100)}%</span>
+                  <span>
+                    2) On scene: {Math.round(progress.mission * 100)}%
+                  </span>
+                  <span>
+                    3) ETA back: {Math.round(progress.returnTrip * 100)}%
+                  </span>
                   <span>4) Filing: {Math.round(progress.filing * 100)}%</span>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {[...new Set(stage?.required ?? [])].map((type) => {
                     const alreadyAssigned = incident.assignedVehicleIds.some(
-                      (id) => game.vehicles.find((v) => v.id === id)?.type === type,
+                      (id) =>
+                        game.vehicles.find((v) => v.id === id)?.type === type,
                     );
                     const match = game.vehicles.find(
                       (v) => v.status === "AVAILABLE" && v.type === type,
@@ -1386,12 +1493,20 @@ export default function Page() {
                       <Button
                         key={`${incident.id}-${type}`}
                         size="sm"
-                        disabled={alreadyAssigned || !match || game.credits < DISPATCH_COST}
+                        disabled={
+                          alreadyAssigned ||
+                          !match ||
+                          game.credits < DISPATCH_COST
+                        }
                         onClick={() => {
                           if (match) dispatch(match.id, incident.id);
                         }}
                       >
-                        {alreadyAssigned ? `${type} sent` : match ? `Send ${type}` : `No ${type}`}
+                        {alreadyAssigned
+                          ? `${type} sent`
+                          : match
+                            ? `Send ${type}`
+                            : `No ${type}`}
                       </Button>
                     );
                   })}
@@ -1404,7 +1519,9 @@ export default function Page() {
         {selectedStation && (
           <div className="rounded-xl border border-sky-700/60 bg-sky-950/40 p-2">
             <p className="text-xs font-semibold">{selectedStation.name}</p>
-            <p className="text-[11px] text-slate-300">Employees: {stationEmployees[selectedStation.id] ?? 0}</p>
+            <p className="text-[11px] text-slate-300">
+              Employees: {stationEmployees[selectedStation.id] ?? 0}
+            </p>
             <Button
               size="sm"
               variant="outline"
@@ -1414,7 +1531,9 @@ export default function Page() {
             >
               Upgrade ({260 + selectedStation.level * 200})
             </Button>
-            <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">Buy vehicles</p>
+            <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">
+              Buy vehicles
+            </p>
             <div className="mt-1 grid grid-cols-2 gap-1.5">
               {(Object.keys(VEHICLE_TYPES) as VehicleType[])
                 .filter(
@@ -1450,7 +1569,10 @@ export default function Page() {
 
         <div className="space-y-1">
           {game.log.slice(0, 4).map((entry, index) => (
-            <p key={`${entry}-${index}`} className="rounded-lg bg-slate-900/90 p-2 text-[11px] text-slate-300">
+            <p
+              key={`${entry}-${index}`}
+              className="rounded-lg bg-slate-900/90 p-2 text-[11px] text-slate-300"
+            >
               {entry}
             </p>
           ))}
