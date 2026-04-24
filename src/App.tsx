@@ -38,6 +38,14 @@ type Station = {
   lng: number;
 };
 
+type RealStationSite = {
+  id: string;
+  name: string;
+  type: StationType;
+  lat: number;
+  lng: number;
+};
+
 type Vehicle = {
   id: number;
   name: string;
@@ -67,6 +75,10 @@ type Incident = {
   currentStage: number;
   stages: IncidentStage[];
   assignedVehicleIds: number[];
+  stageWorkRemaining: number;
+  stageWorkTotal: number;
+  filingRemaining: number;
+  filingTotal: number;
 };
 
 type GameState = {
@@ -85,6 +97,8 @@ type GameState = {
 const STATION_COST = 650;
 const DISPATCH_COST = 18;
 const MAINTENANCE_INTERVAL = 30;
+const STAGE_WORK_SECONDS = 20;
+const FILING_SECONDS = 10;
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
 
@@ -258,6 +272,13 @@ function loadGame(): GameState {
     return {
       ...parsed,
       employees: parsed.employees ?? 10,
+      incidents: parsed.incidents.map((incident) => ({
+        ...incident,
+        stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
+        stageWorkTotal: incident.stageWorkTotal ?? STAGE_WORK_SECONDS,
+        filingRemaining: incident.filingRemaining ?? FILING_SECONDS,
+        filingTotal: incident.filingTotal ?? FILING_SECONDS,
+      })),
       vehicles: parsed.vehicles.map((vehicle) => ({
         ...vehicle,
         route: Array.isArray(vehicle.route) ? vehicle.route : [],
@@ -385,12 +406,17 @@ function nudgePointToward(
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
+  const [buildPickerOpen, setBuildPickerOpen] = useState(false);
+  const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
+  const [realStations, setRealStations] = useState<RealStationSite[]>([]);
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
+  const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  const routeLayerIdsRef = useRef<string[]>([]);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 
   useEffect(() => {
@@ -406,9 +432,40 @@ export default function Page() {
     (incident) => incident.status !== "COMPLETE",
   );
   const hasStarted = game.stations.length > 0;
-  
+  const activeVehicleCount = game.vehicles.filter(
+    (vehicle) => vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING",
+  ).length;
+
   const completedIncidents = game.incidents.filter(
     (incident) => incident.status === "COMPLETE",
+  );
+
+  const missionProgress = useCallback(
+    (incident: Incident) => {
+      const assigned = incident.assignedVehicleIds
+        .map((id) => game.vehicles.find((vehicle) => vehicle.id === id))
+        .filter((vehicle): vehicle is Vehicle => Boolean(vehicle));
+
+      const travelProgress =
+        assigned.length === 0
+          ? 0
+          : assigned.reduce((sum, vehicle) => {
+              if (vehicle.totalEta <= 0) return sum + 1;
+              return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
+            }, 0) / assigned.length;
+      const workProgress =
+        incident.stageWorkTotal <= 0
+          ? 0
+          : 1 - Math.max(incident.stageWorkRemaining, 0) / incident.stageWorkTotal;
+      const filingProgress =
+        incident.filingTotal <= 0
+          ? 0
+          : 1 - Math.max(incident.filingRemaining, 0) / incident.filingTotal;
+
+      const weighted = travelProgress * 0.45 + workProgress * 0.35 + filingProgress * 0.2;
+      return Math.max(0, Math.min(1, weighted));
+    },
+    [game.vehicles],
   );
 
   const buildStationAt = useCallback(
@@ -481,6 +538,49 @@ export default function Page() {
     [],
   );
 
+  const loadRealStations = useCallback(async () => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const bounds = map.getBounds();
+    if (!bounds) return;
+    const south = bounds.getSouth().toFixed(4);
+    const west = bounds.getWest().toFixed(4);
+    const north = bounds.getNorth().toFixed(4);
+    const east = bounds.getEast().toFixed(4);
+
+    const queryByType: Record<StationType, string> = {
+      FIRE: 'node["amenity"="fire_station"]',
+      EMS: 'node["amenity"="hospital"]',
+      POLICE: 'node["amenity"="police"]',
+    };
+
+    const query = `[out:json][timeout:25];(${queryByType[selectedBuild]}(${south},${west},${north},${east}););out body;`;
+
+    try {
+      const response = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        body: query,
+      });
+      if (!response.ok) return;
+
+      const data = (await response.json()) as {
+        elements?: { id: number; lat: number; lon: number; tags?: { name?: string } }[];
+      };
+      const sites =
+        data.elements?.slice(0, 25).map((item) => ({
+          id: `real-${item.id}`,
+          name: item.tags?.name ?? `${STATION_TYPES[selectedBuild].label} Site ${item.id}`,
+          type: selectedBuild,
+          lat: item.lat,
+          lng: item.lon,
+        })) ?? [];
+      setRealStations(sites);
+    } catch {
+      setRealStations([]);
+    }
+  }, [selectedBuild]);
+
   useEffect(() => {
     if (!mapContainerRef.current || !mapToken || mapRef.current) return;
 
@@ -495,29 +595,41 @@ export default function Page() {
     });
 
     mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
-    mapRef.current.on("click", (event) => {
-      buildStationAt(event.lngLat.lat, event.lngLat.lng, selectedBuild);
-    });
 
     return () => {
       stationMarkerRefs.current.forEach((marker) => marker.remove());
       incidentMarkerRefs.current.forEach((marker) => marker.remove());
+      realStationMarkerRefs.current.forEach((marker) => marker.remove());
       vehicleMarkerRefs.current.forEach((marker) => marker.remove());
       stationMarkerRefs.current = [];
       incidentMarkerRefs.current = [];
+      realStationMarkerRefs.current = [];
       vehicleMarkerRefs.current.clear();
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [mapToken, selectedBuild, buildStationAt]);
+  }, [mapToken]);
+
+  useEffect(() => {
+    if (!isSelectingRealStation) return;
+    loadRealStations();
+  }, [isSelectingRealStation, loadRealStations]);
 
   useEffect(() => {
     if (!mapRef.current) return;
 
+    routeLayerIdsRef.current.forEach((id) => {
+      if (mapRef.current?.getLayer(id)) mapRef.current.removeLayer(id);
+      if (mapRef.current?.getSource(id)) mapRef.current.removeSource(id);
+    });
+    routeLayerIdsRef.current = [];
+
     stationMarkerRefs.current.forEach((marker) => marker.remove());
     incidentMarkerRefs.current.forEach((marker) => marker.remove());
+    realStationMarkerRefs.current.forEach((marker) => marker.remove());
     stationMarkerRefs.current = [];
     incidentMarkerRefs.current = [];
+    realStationMarkerRefs.current = [];
 
     game.stations.forEach((station) => {
       const el = document.createElement("div");
@@ -618,8 +730,68 @@ export default function Page() {
       vehicleMarkerRefs.current.set(
         vehicle.id, new mapboxgl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(mapRef.current!),
       );
+
+      if (vehicle.route.length >= 2) {
+        const routeId = `vehicle-route-${vehicle.id}`;
+        routeLayerIdsRef.current.push(routeId);
+        mapRef.current?.addSource(routeId, {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: vehicle.route,
+            },
+            properties: {},
+          },
+        });
+        mapRef.current?.addLayer({
+          id: routeId,
+          type: "line",
+          source: routeId,
+          paint: {
+            "line-color": vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
+            "line-width": 3,
+            "line-opacity": 0.8,
+          },
+        });
+      }
     });
-  }, [activeIncidents, game.incidents, game.stations, game.vehicles]);
+
+    if (isSelectingRealStation) {
+      realStations.forEach((site) => {
+        const el = document.createElement("button");
+        el.className =
+          "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-100 bg-violet-500 text-white shadow-lg";
+        el.innerHTML = "+";
+        el.title = `Build at ${site.name}`;
+        el.onclick = () => {
+          const accepted = window.confirm(
+            `Build ${STATION_TYPES[selectedBuild].label} station at ${site.name}?`,
+          );
+          if (!accepted) return;
+          buildStationAt(site.lat, site.lng, selectedBuild);
+          setIsSelectingRealStation(false);
+          setBuildPickerOpen(false);
+        };
+
+        realStationMarkerRefs.current.push(
+          new mapboxgl.Marker({ element: el, anchor: "center" })
+            .setLngLat([site.lng, site.lat])
+            .addTo(mapRef.current!),
+        );
+      });
+    }
+  }, [
+    activeIncidents,
+    buildStationAt,
+    game.incidents,
+    game.stations,
+    game.vehicles,
+    isSelectingRealStation,
+    realStations,
+    selectedBuild,
+  ]);
 
   const chooseIncidentTemplates = useCallback((state: GameState) => {
     if (state.stations.length !== 1) {
@@ -661,6 +833,10 @@ export default function Page() {
         currentStage: 0,
         stages: template.stages,
         assignedVehicleIds: [],
+        stageWorkRemaining: STAGE_WORK_SECONDS,
+        stageWorkTotal: STAGE_WORK_SECONDS,
+        filingRemaining: FILING_SECONDS,
+        filingTotal: FILING_SECONDS,
       };
 
       return {
@@ -693,7 +869,14 @@ export default function Page() {
     setGame((current) => {
       const vehicle = current.vehicles.find((v) => v.id === vehicleId);
       const incident = current.incidents.find((i) => i.id === incidentId);
-      if (!vehicle || !incident || current.credits < DISPATCH_COST) return current;
+      if (
+        !vehicle ||
+        !incident ||
+        vehicle.status !== "AVAILABLE" ||
+        current.credits < DISPATCH_COST
+      ) {
+        return current;
+      }
 
       const station = current.stations.find((s) => s.id === vehicle.stationId);
       if (!station) return current;
@@ -735,19 +918,20 @@ export default function Page() {
     });
   }
 
-  function buyVehicle(type: VehicleType) {
+  function buyVehicle(stationId: number, type: VehicleType) {
     setGame((current) => {
       const config = VEHICLE_TYPES[type];
-      const possibleStations = current.stations.filter(
-        (station) => station.type === config.stationType,
-      );
+      const station = current.stations.find((item) => item.id === stationId);
 
-      const station = possibleStations.find((candidate) => {
-        const used = current.vehicles.filter((v) => v.stationId === candidate.id).length;
-        return used < stationCapacity(candidate.level);
-      });
-
-      if (!station || current.credits < config.cost) return current;
+      if (
+        !station ||
+        station.type !== config.stationType ||
+        current.credits < config.cost
+      ) {
+        return current;
+      }
+      const used = current.vehicles.filter((v) => v.stationId === station.id).length;
+      if (used >= stationCapacity(station.level)) return current;
 
       const id = current.nextVehicleId;
       const vehicle: Vehicle = {
@@ -846,41 +1030,71 @@ export default function Page() {
 
           if (!hasAllRequired) return incident;
 
+          if (incident.stageWorkRemaining > 0) {
+            return {
+              ...incident,
+              stageWorkRemaining: incident.stageWorkRemaining - 1,
+            };
+          }
+
           const nextStage = incident.currentStage + 1;
           if (nextStage >= incident.stages.length) {
-            creditsEarned += incident.reward;
-            progressNotes.push(`${incident.title} completed (+${incident.reward}).`);
-
             const assignedIds = new Set(incident.assignedVehicleIds);
-            nextVehicles = nextVehicles.map((vehicle) => {
-              if (!assignedIds.has(vehicle.id)) return vehicle;
-              const station = current.stations.find((s) => s.id === vehicle.stationId);
-              if (!station) return vehicle;
-              const returnKm = haversineKm(station, incident);
-              const returnEta = Math.max(
-                8,
-                Math.round((returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600),
-              );
+            const anyDispatched = nextVehicles.some(
+              (vehicle) =>
+                assignedIds.has(vehicle.id) && vehicle.status === "DISPATCHED" && vehicle.eta <= 0,
+            );
+            if (anyDispatched) {
+              nextVehicles = nextVehicles.map((vehicle) => {
+                if (!assignedIds.has(vehicle.id) || vehicle.status !== "DISPATCHED") return vehicle;
+                const station = current.stations.find((s) => s.id === vehicle.stationId);
+                if (!station) return vehicle;
+                const returnKm = haversineKm(station, incident);
+                const returnEta = Math.max(
+                  8,
+                  Math.round((returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600),
+                );
 
+                return {
+                  ...vehicle,
+                  status: "RETURNING" as VehicleStatus,
+                  incidentId: incident.id,
+                  eta: returnEta,
+                  totalEta: returnEta,
+                  route:
+                    vehicle.route.length >= 2
+                      ? [...vehicle.route].reverse()
+                      : [
+                          [incident.lng, incident.lat],
+                          [station.lng, station.lat],
+                        ],
+                };
+              });
+            }
+
+            const allBackAtStation = nextVehicles.every(
+              (vehicle) =>
+                !assignedIds.has(vehicle.id) ||
+                (vehicle.status === "AVAILABLE" && vehicle.incidentId === null),
+            );
+            const nextFiling = allBackAtStation
+              ? Math.max(incident.filingRemaining - 1, 0)
+              : incident.filingRemaining;
+            if (allBackAtStation && nextFiling === 0) {
+              creditsEarned += incident.reward;
+              progressNotes.push(`${incident.title} completed (+${incident.reward}).`);
               return {
-                ...vehicle,
-                status: "RETURNING" as VehicleStatus,
-                incidentId: incident.id,
-                eta: returnEta,
-                totalEta: returnEta,
-                route:
-                  vehicle.route.length >= 2
-                    ? [...vehicle.route].reverse()
-                    : [
-                        [incident.lng, incident.lat],
-                        [station.lng, station.lat],
-                      ],
+                ...incident,
+                status: "COMPLETE" as IncidentStatus,
+                filingRemaining: 0,
+                stageWorkRemaining: 0,
               };
-            });
+            }
 
             return {
               ...incident,
-              status: "COMPLETE" as IncidentStatus,
+              filingRemaining: nextFiling,
+              stageWorkRemaining: 0,
             };
           }
 
@@ -888,6 +1102,8 @@ export default function Page() {
           return {
             ...incident,
             currentStage: nextStage,
+            stageWorkRemaining: STAGE_WORK_SECONDS,
+            stageWorkTotal: STAGE_WORK_SECONDS,
           };
         });
 
@@ -937,6 +1153,10 @@ export default function Page() {
               currentStage: 0,
               stages: template.stages,
               assignedVehicleIds: [],
+              stageWorkRemaining: STAGE_WORK_SECONDS,
+              stageWorkTotal: STAGE_WORK_SECONDS,
+              filingRemaining: FILING_SECONDS,
+              filingTotal: FILING_SECONDS,
             };
             nextIncidentId += 1;
             finalIncidents = [...finalIncidents, incident];
@@ -986,74 +1206,68 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute left-3 top-3 z-30 w-[320px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
-        <h1 className="text-base font-black tracking-tight">Emergency Services</h1>
+      <div className="absolute left-3 top-3 z-30 w-[250px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-2.5 shadow-2xl backdrop-blur-sm">
+        <div className="flex items-center justify-between">
+          <h1 className="text-sm font-black tracking-tight">Emergency Services</h1>
+          <Button
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={() => {
+              setBuildPickerOpen((open) => !open);
+              setIsSelectingRealStation(false);
+            }}
+            title="Buy building"
+          >
+            +
+          </Button>
+        </div>
         <div className="flex flex-wrap gap-1.5">
           <Badge tone="good">
             <Coins className="mr-1 h-3 w-3" />
             {game.credits}
           </Badge>
-          <Badge>{game.employees} staff</Badge>
           <Badge tone="blue">
             <Radio className="mr-1 h-3 w-3" />
             {activeIncidents.length} open
           </Badge>
           <Badge>{completedIncidents.length} closed</Badge>
+          <Badge>{activeVehicleCount} active</Badge>
         </div>
 
-        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Build</p>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
-              const Icon = STATION_TYPES[type].icon;
-              return (
-                <Button
-                  key={type}
-                  size="sm"
-                  variant={selectedBuild === type ? "default" : "outline"}
-                  onClick={() => setSelectedBuild(type)}
-                >
-                  <House className="mr-1 h-3.5 w-3.5" />
-                  <Icon className="mr-1 h-3.5 w-3.5" />
-                  {STATION_TYPES[type].label}
-                </Button>
-              );
-            })}
+        {buildPickerOpen && (
+          <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Buy building</p>
+            <div className="flex flex-wrap gap-1.5">
+              {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
+                const Icon = STATION_TYPES[type].icon;
+                return (
+                  <Button
+                    key={type}
+                    size="sm"
+                    variant={selectedBuild === type ? "default" : "outline"}
+                    onClick={() => setSelectedBuild(type)}
+                  >
+                    <House className="mr-1 h-3.5 w-3.5" />
+                    <Icon className="mr-1 h-3.5 w-3.5" />
+                    {STATION_TYPES[type].label}
+                  </Button>
+                );
+              })}
+            </div>
+            <Button
+              size="sm"
+              className="mt-2 w-full"
+              onClick={() => setIsSelectingRealStation(true)}
+            >
+              Select real station on map
+            </Button>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {hasStarted
+                ? `Cost: ${STATION_COST} credits`
+                : "First building is free"}
+            </p>
           </div>
-          <p className="mt-2 text-[11px] text-slate-400">
-            {hasStarted
-              ? `Click map to place a ${STATION_TYPES[selectedBuild].label} building (${STATION_COST} credits).`
-              : `Place your first ${STATION_TYPES[selectedBuild].label} building free.`}
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
-          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Vehicles</p>
-          <div className="grid grid-cols-2 gap-1.5">
-            {(Object.keys(VEHICLE_TYPES) as VehicleType[]).map((type) => {
-              const Icon =
-                type === "ENGINE" || type === "LADDER"
-                  ? Truck
-                  : type === "PATROL" || type === "SWAT"
-                    ? CarFront
-                    : type === "AMBULANCE"
-                      ? Ambulance
-                      : Siren;
-              return (
-                <Button
-                  key={type}
-                  size="sm"
-                  variant="outline"
-                  onClick={() => buyVehicle(type)}
-                  disabled={game.credits < VEHICLE_TYPES[type].cost}
-                >
-                  <Icon className="mr-1 h-3.5 w-3.5" />
-                  {VEHICLE_TYPES[type].label}
-                </Button>
-              );
-            })}
-          </div>
-        </div>
+        )}
 
         <div className="flex gap-1.5">
           <Button size="sm" className="flex-1" onClick={spawnIncident} disabled={!hasStarted || activeIncidents.length >= 2}>
@@ -1080,6 +1294,18 @@ export default function Page() {
                     <p className="text-[11px] text-slate-400">{stage?.label} • reward {incident.reward}</p>
                   </div>
                   <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>{incident.status}</Badge>
+                </div>
+                <div className="mt-2">
+                  <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
+                    <span>Mission progress</span>
+                    <span>{Math.round(missionProgress(incident) * 100)}%</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
+                    <div
+                      className="h-full bg-emerald-500 transition-all"
+                      style={{ width: `${Math.round(missionProgress(incident) * 100)}%` }}
+                    />
+                  </div>
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {[...new Set(stage?.required ?? [])].map((type) => {
@@ -1121,6 +1347,33 @@ export default function Page() {
             >
               Upgrade ({260 + selectedStation.level * 200})
             </Button>
+            <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">Buy vehicles</p>
+            <div className="mt-1 grid grid-cols-2 gap-1.5">
+              {(Object.keys(VEHICLE_TYPES) as VehicleType[])
+                .filter((type) => VEHICLE_TYPES[type].stationType === selectedStation.type)
+                .map((type) => {
+                  const Icon =
+                    type === "ENGINE" || type === "LADDER"
+                      ? Truck
+                      : type === "PATROL" || type === "SWAT"
+                        ? CarFront
+                        : type === "AMBULANCE"
+                          ? Ambulance
+                          : Siren;
+                  return (
+                    <Button
+                      key={`${selectedStation.id}-${type}`}
+                      size="sm"
+                      variant="outline"
+                      disabled={game.credits < VEHICLE_TYPES[type].cost}
+                      onClick={() => buyVehicle(selectedStation.id, type)}
+                    >
+                      <Icon className="mr-1 h-3.5 w-3.5" />
+                      {VEHICLE_TYPES[type].label}
+                    </Button>
+                  );
+                })}
+            </div>
           </div>
         )}
 
