@@ -5,18 +5,17 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import {
   Ambulance,
+  CarFront,
   Coins,
-  Expand,
   Flame,
+  House,
   Radio,
   Shield,
-  Shrink,
   Siren,
   Truck,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
 type StationType = "FIRE" | "EMS" | "POLICE";
 type VehicleType =
@@ -362,12 +361,6 @@ const categoryColor: Record<IncidentCategory, string> = {
   POLICE: "bg-sky-500",
 };
 
-function formatSeconds(seconds: number) {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.max(0, seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
 function nudgePointToward(
   from: { lat: number; lng: number },
   to: { lat: number; lng: number },
@@ -393,7 +386,6 @@ export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
   const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
-  const [isMapFullscreen, setIsMapFullscreen] = useState(false);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -520,10 +512,6 @@ export default function Page() {
   }, [mapToken, selectedBuild, buildStationAt]);
 
   useEffect(() => {
-    mapRef.current?.resize();
-  }, [isMapFullscreen]);
-
-  useEffect(() => {
     if (!mapRef.current) return;
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
@@ -533,15 +521,26 @@ export default function Page() {
 
     game.stations.forEach((station) => {
       const el = document.createElement("div");
-      el.className =
-        "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 bg-sky-500 text-[10px] font-black text-white shadow-lg";
+      el.className = "relative flex h-10 w-10 items-start justify-center";
       el.title = station.name;
-      el.textContent =
-        station.type === "FIRE" ? "F" : station.type === "EMS" ? "E" : "P";
+      const color =
+        station.type === "FIRE"
+          ? "rgba(244,63,94,0.95)"
+          : station.type === "EMS"
+            ? "rgba(16,185,129,0.95)"
+            : "rgba(14,165,233,0.95)";
+      const label =
+        station.type === "FIRE" ? "🚒" : station.type === "EMS" ? "🏥" : "🏢";
+      el.innerHTML = `
+        <div style="position:relative;display:flex;height:30px;width:30px;align-items:center;justify-content:center;border-radius:8px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:15px;">
+          ${label}
+        </div>
+        <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
+      `;
       el.onclick = () => setSelectedStationId(station.id);
 
       stationMarkerRefs.current.push(
-        new mapboxgl.Marker({ element: el, anchor: "center" })
+        new mapboxgl.Marker({ element: el, anchor: "bottom" })
           .setLngLat([station.lng, station.lat])
           .addTo(mapRef.current!),
       );
@@ -588,16 +587,31 @@ export default function Page() {
       }
 
       const el = document.createElement("div");
-      el.className =
-        "flex h-4 w-4 items-center justify-center rounded-full border border-white bg-yellow-300 text-[8px] font-bold text-slate-900";
-      el.textContent = "V";
+      const color =
+        vehicle.type === "ENGINE" || vehicle.type === "LADDER"
+          ? "rgba(249,115,22,0.95)"
+          : vehicle.type === "AMBULANCE" || vehicle.type === "RESCUE"
+            ? "rgba(34,197,94,0.95)"
+            : "rgba(14,165,233,0.95)";
+      const icon =
+        vehicle.type === "ENGINE" || vehicle.type === "LADDER"
+          ? "🚒"
+          : vehicle.type === "AMBULANCE"
+            ? "🚑"
+            : vehicle.type === "RESCUE"
+              ? "🚐"
+              : "🚓";
+      el.className = "relative flex h-8 w-8 items-start justify-center";
+      el.innerHTML = `
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">
+          ${icon}
+        </div>
+        <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
+      `;
       el.title = vehicle.name;
 
       vehicleMarkerRefs.current.set(
-        vehicle.id,
-        new mapboxgl.Marker({ element: el, anchor: "center" })
-          .setLngLat([lng, lat])
-          .addTo(mapRef.current!),
+        vehicle.id, new mapboxgl.Marker({ element: el, anchor: "bottom" }).setLngLat([lng, lat]).addTo(mapRef.current!),
       );
     });
   }, [activeIncidents, game.incidents, game.stations, game.vehicles]);
@@ -940,15 +954,6 @@ export default function Page() {
     return () => clearInterval(timer);
   }, [chooseIncidentTemplates]);
 
-  const stationUsage = useMemo(() => {
-    return Object.fromEntries(
-      game.stations.map((station) => [
-        station.id,
-        game.vehicles.filter((vehicle) => vehicle.stationId === station.id).length,
-      ]),
-    );
-  }, [game.stations, game.vehicles]);
-
   const stationEmployees = useMemo(() => {
     if (game.stations.length === 0) return {} as Record<number, number>;
     const base = Math.floor(game.employees / game.stations.length);
@@ -967,346 +972,161 @@ export default function Page() {
     null;
 
   return (
-    <main className="min-h-screen bg-[#0b1727] p-4 text-slate-100">
-      <div className="mx-auto max-w-[1450px] space-y-4">
-        <header className="flex flex-col gap-3 rounded-2xl border border-[#2b3b52] bg-[#12233a] p-5 shadow-2xl md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-3xl font-black tracking-tight">Emergency Services</h1>
-            <p className="text-sm text-slate-400">
-              Click map to build stations, dispatch by real distance, and clear staged incidents.
-            </p>
+    <main className="relative h-screen w-screen overflow-hidden bg-[#0b1727] text-slate-100">
+      {mapToken ? (
+        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
+      ) : (
+        <div className="absolute left-4 top-4 z-40 max-w-md rounded-xl border border-amber-700 bg-amber-900/80 p-4 text-sm text-amber-100">
+          Add <code>VITE_MAPBOX_TOKEN</code> in your <code>.env</code> file to enable the live map.
+        </div>
+      )}
+
+      <div className="absolute left-3 top-3 z-30 w-[320px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
+        <h1 className="text-base font-black tracking-tight">Emergency Services</h1>
+        <div className="flex flex-wrap gap-1.5">
+          <Badge tone="good">
+            <Coins className="mr-1 h-3 w-3" />
+            {game.credits}
+          </Badge>
+          <Badge>{game.employees} staff</Badge>
+          <Badge tone="blue">
+            <Radio className="mr-1 h-3 w-3" />
+            {activeIncidents.length} open
+          </Badge>
+          <Badge>{completedIncidents.length} closed</Badge>
+        </div>
+
+        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Build</p>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
+              const Icon = STATION_TYPES[type].icon;
+              return (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant={selectedBuild === type ? "default" : "outline"}
+                  onClick={() => setSelectedBuild(type)}
+                >
+                  <House className="mr-1 h-3.5 w-3.5" />
+                  <Icon className="mr-1 h-3.5 w-3.5" />
+                  {STATION_TYPES[type].label}
+                </Button>
+              );
+            })}
           </div>
+          <p className="mt-2 text-[11px] text-slate-400">
+            {hasStarted
+              ? `Click map to place a ${STATION_TYPES[selectedBuild].label} building (${STATION_COST} credits).`
+              : `Place your first ${STATION_TYPES[selectedBuild].label} building free.`}
+          </p>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="good">
-              <Coins className="mr-1 h-3 w-3" />
-              {game.credits} credits
-            </Badge>
-            <Badge>{game.employees} employees</Badge>
-
-            <Badge tone="blue">
-              <Radio className="mr-1 h-3 w-3" />
-              {activeIncidents.length} open calls
-            </Badge>
-
-            <Badge>{completedIncidents.length} closed</Badge>
-
-            <Button onClick={spawnIncident} disabled={!hasStarted || activeIncidents.length >= 2}>
-              Create Call
-            </Button>
-
-            <Button variant="outline" onClick={resetGame}>
-              Reset
-            </Button>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Vehicles</p>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(Object.keys(VEHICLE_TYPES) as VehicleType[]).map((type) => {
+              const Icon =
+                type === "ENGINE" || type === "LADDER"
+                  ? Truck
+                  : type === "PATROL" || type === "SWAT"
+                    ? CarFront
+                    : type === "AMBULANCE"
+                      ? Ambulance
+                      : Siren;
+              return (
+                <Button
+                  key={type}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => buyVehicle(type)}
+                  disabled={game.credits < VEHICLE_TYPES[type].cost}
+                >
+                  <Icon className="mr-1 h-3.5 w-3.5" />
+                  {VEHICLE_TYPES[type].label}
+                </Button>
+              );
+            })}
           </div>
-        </header>
+        </div>
 
-        <section className="grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
-          <Card
-            className={`${isMapFullscreen ? "fixed inset-3 z-50" : ""} border-[#2b3b52] bg-[#12233a] text-slate-100`}
-          >
-            <CardContent className="p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-xl font-bold">City Map</h2>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400">Mapbox live map</span>
-                  <Button variant="outline" size="sm" onClick={() => setIsMapFullscreen((s) => !s)}>
-                    {isMapFullscreen ? <Shrink className="mr-1 h-4 w-4" /> : <Expand className="mr-1 h-4 w-4" />}
-                    {isMapFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                  </Button>
+        <div className="flex gap-1.5">
+          <Button size="sm" className="flex-1" onClick={spawnIncident} disabled={!hasStarted || activeIncidents.length >= 2}>
+            Create Call
+          </Button>
+          <Button size="sm" variant="outline" onClick={resetGame}>
+            Reset
+          </Button>
+        </div>
+      </div>
+
+       <div className="absolute bottom-3 right-3 z-30 max-h-[52vh] w-[360px] space-y-2 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
+        <h2 className="text-sm font-bold">Live Incidents</h2>
+        {activeIncidents.length === 0 ? (
+          <p className="text-xs text-slate-400">No active incidents.</p>
+        ) : (
+          activeIncidents.map((incident) => {
+            const stage = incident.stages[incident.currentStage];
+            return (
+              <div key={incident.id} className="rounded-xl border border-slate-700 bg-slate-900/90 p-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{incident.title}</p>
+                    <p className="text-[11px] text-slate-400">{stage?.label} • reward {incident.reward}</p>
+                  </div>
+                  <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>{incident.status}</Badge>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {[...new Set(stage?.required ?? [])].map((type) => {
+                    const alreadyAssigned = incident.assignedVehicleIds.some(
+                      (id) => game.vehicles.find((v) => v.id === id)?.type === type,
+                    );
+                    const match = game.vehicles.find(
+                      (v) => v.status === "AVAILABLE" && v.type === type,
+                    );
+                    return (
+                      <Button
+                        key={`${incident.id}-${type}`}
+                        size="sm"
+                        disabled={alreadyAssigned || !match || game.credits < DISPATCH_COST}
+                        onClick={() => {
+                          if (match) dispatch(match.id, incident.id);
+                        }}
+                      >
+                        {alreadyAssigned ? `${type} sent` : match ? `Send ${type}` : `No ${type}`}
+                      </Button>
+                    );
+                  })}
                 </div>
               </div>
-
-              {mapToken ? (
-                <div
-                  ref={mapContainerRef}
-                  className={`${isMapFullscreen ? "h-[calc(100vh-7rem)]" : "h-[560px]"} w-full rounded-2xl border border-slate-800`}                
-                />
-              ) : (
-                <div className="rounded-2xl border border-amber-700 bg-amber-900/30 p-4 text-sm text-amber-100">
-                  Add <code>VITE_MAPBOX_TOKEN</code> in your <code>.env</code> file to enable the live map.
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {!isMapFullscreen && (
-            <div className="space-y-4">
-              <Card className="border-[#2b3b52] bg-[#12233a] text-slate-100">
-                <CardContent className="space-y-3 p-4">
-                  <h2 className="text-xl font-bold">Build</h2>
-
-                  <div className="flex flex-wrap gap-2">
-                    {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
-                      const config = STATION_TYPES[type];
-                      const Icon = config.icon;
-
-                      return (
-                        <Button
-                          key={type}
-                          variant={selectedBuild === type ? "default" : "outline"}
-                          onClick={() => setSelectedBuild(type)}
-                        >
-                          <Icon className="mr-2 h-4 w-4" />
-                          {config.label}
-                        </Button>
-                      );
-                    })}
-                  </div>
-
-                  <p className="text-xs text-slate-400">
-                    {hasStarted
-                      ? `Click anywhere on map to build a ${STATION_TYPES[selectedBuild].label} station (${STATION_COST} credits).`
-                      : `Place your first ${STATION_TYPES[selectedBuild].label} building for free to start. It begins with 2 vehicles and 10 employees.`}
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card className="border-[#2b3b52] bg-[#12233a] text-slate-100">
-                <CardContent className="space-y-3 p-4">
-                  <h2 className="text-xl font-bold">Buy Vehicles</h2>
-
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {(Object.keys(VEHICLE_TYPES) as VehicleType[]).map((type) => {
-                      const config = VEHICLE_TYPES[type];
-                      const Icon = config.icon;
-
-                      return (
-                        <Button
-                          key={type}
-                          variant="outline"
-                          onClick={() => buyVehicle(type)}
-                          disabled={game.credits < config.cost}
-                        >
-                          <Icon className="mr-2 h-4 w-4" />
-                          {config.label} {config.cost}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-        </section>
-
-        {!isMapFullscreen && (
-          <section className="grid gap-4 lg:grid-cols-3">
-            <Panel title="Active Incidents">
-              {activeIncidents.length === 0 ? (
-                <p className="text-sm text-slate-400">No active incidents.</p>
-              ) : (
-                activeIncidents.map((incident) => {
-                  const stage = incident.stages[incident.currentStage];
-
-                  return (
-                    <div
-                      key={incident.id}
-                      className="rounded-2xl border border-slate-800 bg-slate-950 p-3"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className="font-bold">{incident.title}</h3>
-                          <p className="text-xs text-slate-400">
-                            {incident.lat.toFixed(4)},{incident.lng.toFixed(4)} • Reward {incident.reward} • Sev {incident.severity}
-                          </p>
-                        </div>
-
-                        <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>
-                          {incident.status}
-                        </Badge>
-                      </div>
-
-                      <p className="mt-2 text-xs text-slate-300">
-                        Stage {incident.currentStage + 1}/{incident.stages.length}: {stage?.label}
-                      </p>
-
-                      <p className="mt-1 text-xs text-slate-300">Required: {stage?.required.join(", ")}</p>
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {[...new Set(stage?.required ?? [])].map((type) => {
-                          const alreadyAssigned = incident.assignedVehicleIds.some(
-                            (id) =>
-                              game.vehicles.find((v) => v.id === id)?.type === type,
-                          );
-
-                          const match = game.vehicles.find(
-                            (v) => v.status === "AVAILABLE" && v.type === type,
-                          );
-
-                          return (
-                            <Button
-                              key={`${incident.id}-${type}`}
-                              size="sm"
-                              disabled={alreadyAssigned || !match || game.credits < DISPATCH_COST}
-                              onClick={() => {
-                                if (match) dispatch(match.id, incident.id);
-                              }}
-                            >
-                              {alreadyAssigned
-                                ? `${type} sent`
-                                : match
-                                  ? `Send ${match.name}`
-                                  : `No ${type}`}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </Panel>
-
-            <Panel title="Fleet">
-              {game.vehicles.map((vehicle) => {
-                const Icon = VEHICLE_TYPES[vehicle.type].icon;
-                const pct =
-                  vehicle.totalEta > 0
-                    ? Math.min(100, Math.max(0, Math.round(((vehicle.totalEta - vehicle.eta) / vehicle.totalEta) * 100)))
-                    : 0;
-
-                return (
-                  <div
-                    key={vehicle.id}
-                    className="rounded-2xl border border-slate-800 bg-slate-950 p-3"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Icon className="h-5 w-5" />
-
-                        <div>
-                          <p className="font-semibold">{vehicle.name}</p>
-                          <p className="text-xs text-slate-400">{vehicle.type}</p>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <Badge
-                          tone={
-                            vehicle.status === "AVAILABLE"
-                              ? "good"
-                              : vehicle.status === "RETURNING"
-                                ? "warn"
-                                : "blue"
-                          }
-                        >
-                          {vehicle.status}
-                        </Badge>
-
-                        {vehicle.eta > 0 && <p className="mt-1 text-xs text-slate-400">ETA {formatSeconds(vehicle.eta)}</p>}
-                      </div>
-                    </div>
-
-                    {vehicle.status !== "AVAILABLE" && (
-                      <div className="mt-2 h-1.5 w-full rounded bg-slate-800">
-                        <div className="h-1.5 rounded bg-cyan-500" style={{ width: `${pct}%` }} />
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </Panel>
-
-            <Panel title="Stations & Log">
-              <div className="space-y-2">
-                {game.stations.map((station) => {
-                  const Icon = STATION_TYPES[station.type].icon;
-                  const upgradeCost = 260 + station.level * 200;
-                  const used = stationUsage[station.id] ?? 0;
-                  const capacity = stationCapacity(station.level);
-
-                  return (
-                    <div
-                      key={station.id}
-                      className="rounded-2xl border border-slate-800 bg-slate-950 p-3"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-3">
-                          <Icon className="h-5 w-5" />
-
-                          <div>
-                            <p className="font-semibold">{station.name}</p>
-                            <p className="text-xs text-slate-400">
-                              {station.type} • Level {station.level} • {used}/{capacity} vehicles
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {station.lat.toFixed(4)}, {station.lng.toFixed(4)}
-                            </p>
-                          </div>
-                        </div>
-
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={game.credits < upgradeCost}
-                          onClick={() => upgradeStation(station.id)}
-                        >
-                          Upgrade {upgradeCost}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setSelectedStationId(station.id)}
-                        >
-                          Open
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {selectedStation && (
-                <div className="rounded-2xl border border-sky-700/60 bg-sky-950/40 p-3">
-                  <h3 className="font-semibold">{selectedStation.name} Overview</h3>
-                  <p className="text-xs text-slate-300">
-                    Employees: {stationEmployees[selectedStation.id] ?? 0}
-                  </p>
-                  <p className="mt-2 text-xs font-semibold text-slate-200">Vehicles</p>
-                  <div className="mt-1 space-y-1">
-                    {game.vehicles
-                      .filter((vehicle) => vehicle.stationId === selectedStation.id)
-                      .map((vehicle) => (
-                        <p key={vehicle.id} className="text-xs text-slate-300">
-                          {vehicle.name} • {vehicle.status}
-                        </p>
-                      ))}
-                  </div>
-                </div>
-              )}
-              
-              <div className="mt-4 space-y-2">
-                {game.log.map((entry, index) => (
-                  <p
-                    key={`${entry}-${index}`}
-                    className="rounded-xl bg-slate-950 p-2 text-xs text-slate-300"
-                  >
-                    {entry}
-                  </p>
-                ))}
-              </div>
-            </Panel>
-          </section>
+            );
+          })
         )}
+
+        {selectedStation && (
+          <div className="rounded-xl border border-sky-700/60 bg-sky-950/40 p-2">
+            <p className="text-xs font-semibold">{selectedStation.name}</p>
+            <p className="text-[11px] text-slate-300">Employees: {stationEmployees[selectedStation.id] ?? 0}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2"
+              disabled={game.credits < 260 + selectedStation.level * 200}
+              onClick={() => upgradeStation(selectedStation.id)}
+            >
+              Upgrade ({260 + selectedStation.level * 200})
+            </Button>
+          </div>
+        )}
+
+        <div className="space-y-1">
+          {game.log.slice(0, 4).map((entry, index) => (
+            <p key={`${entry}-${index}`} className="rounded-lg bg-slate-900/90 p-2 text-[11px] text-slate-300">
+              {entry}
+            </p>
+          ))}
+        </div>
       </div>
     </main>
-  );
-}
-
-function Panel({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <Card className="border-slate-800 bg-slate-900 text-slate-100">
-      <CardContent className="space-y-3 p-4">
-        <h2 className="text-xl font-bold">{title}</h2>
-        <div className="space-y-3">{children}</div>
-      </CardContent>
-    </Card>
   );
 }
