@@ -72,6 +72,7 @@ type Incident = {
 
 type GameState = {
   credits: number;
+  employees: number;
   nextStationId: number;
   nextVehicleId: number;
   nextIncidentId: number;
@@ -181,75 +182,15 @@ const INCIDENT_TEMPLATES = [
 
 const initialState: GameState = {
   credits: 900,
-  nextStationId: 4,
-  nextVehicleId: 4,
+  employees: 10,
+  nextStationId: 1,
+  nextVehicleId: 1,
   nextIncidentId: 1,
   resolvedCount: 0,
-  stations: [
-    {
-      id: 1,
-      name: "Central Fire Station",
-      type: "FIRE",
-      level: 1,
-      lat: 37.774,
-      lng: -122.43,
-    },
-    {
-      id: 2,
-      name: "City Ambulance Base",
-      type: "EMS",
-      level: 1,
-      lat: 37.768,
-      lng: -122.402,
-    },
-    {
-      id: 3,
-      name: "North Police Station",
-      type: "POLICE",
-      level: 1,
-      lat: 37.79,
-      lng: -122.415,
-    },
-  ],
-  vehicles: [
-    {
-      id: 1,
-      name: "Engine 1",
-      type: "ENGINE",
-      stationId: 1,
-      status: "AVAILABLE",
-      eta: 0,
-      totalEta: 0,
-      incidentId: null,
-      route: [],
-    },
-    {
-      id: 2,
-      name: "Ambulance 1",
-      type: "AMBULANCE",
-      stationId: 2,
-      status: "AVAILABLE",
-      eta: 0,
-      totalEta: 0,
-      incidentId: null,
-      route: [],
-    },
-    {
-      id: 3,
-      name: "Patrol 1",
-      type: "PATROL",
-      stationId: 3,
-      status: "AVAILABLE",
-      eta: 0,
-      totalEta: 0,
-      incidentId: null,
-      route: [],
-    },
-  ],
+  stations: [],
+  vehicles: [],
   incidents: [],
-  log: [
-    "Welcome to Emergency Services. Click on map to build stations and dispatch smart.",
-  ],
+  log: ["Place your first building on the map to start the game."],
 };
 
 const rand = (min: number, max: number) =>
@@ -270,8 +211,14 @@ function haversineKm(
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function stationCapacity(level: number) {
-  return 2 + level * 2;
+function stationCapacity(_level: number) {
+  return 2;
+}
+
+function starterVehicleType(stationType: StationType): VehicleType {
+  if (stationType === "FIRE") return "ENGINE";
+  if (stationType === "EMS") return "AMBULANCE";
+  return "PATROL";
 }
 
 function loadGame(): GameState {
@@ -284,6 +231,7 @@ function loadGame(): GameState {
     const parsed = JSON.parse(saved) as GameState;
     return {
       ...parsed,
+      employees: parsed.employees ?? 10,
       vehicles: parsed.vehicles.map((vehicle) => ({
         ...vehicle,
         route: Array.isArray(vehicle.route) ? vehicle.route : [],
@@ -416,7 +364,8 @@ export default function Page() {
   const activeIncidents = game.incidents.filter(
     (incident) => incident.status !== "COMPLETE",
   );
-
+  const hasStarted = game.stations.length > 0;
+  
   const completedIncidents = game.incidents.filter(
     (incident) => incident.status === "COMPLETE",
   );
@@ -424,7 +373,9 @@ export default function Page() {
   const buildStationAt = useCallback(
     (lat: number, lng: number, type: StationType) => {
       setGame((current) => {
-        if (current.credits < STATION_COST) return current;
+        const isFirstStation = current.stations.length === 0;
+        const buildCost = isFirstStation ? 0 : STATION_COST;
+        if (current.credits < buildCost) return current;
 
         const id = current.nextStationId;
         const label = STATION_TYPES[type].label;
@@ -438,12 +389,51 @@ export default function Page() {
           lng,
         };
 
+        let nextVehicleId = current.nextVehicleId;
+        let vehicles = current.vehicles;
+        if (isFirstStation) {
+          const starterType = starterVehicleType(type);
+          vehicles = [
+            ...current.vehicles,
+            {
+              id: nextVehicleId,
+              name: `${VEHICLE_TYPES[starterType].label} ${nextVehicleId}`,
+              type: starterType,
+              stationId: id,
+              status: "AVAILABLE",
+              eta: 0,
+              totalEta: 0,
+              incidentId: null,
+              route: [],
+            },
+            {
+              id: nextVehicleId + 1,
+              name: `${VEHICLE_TYPES[starterType].label} ${nextVehicleId + 1}`,
+              type: starterType,
+              stationId: id,
+              status: "AVAILABLE",
+              eta: 0,
+              totalEta: 0,
+              incidentId: null,
+              route: [],
+            },
+          ];
+          nextVehicleId += 2;
+        }
+
         return {
           ...current,
-          credits: current.credits - STATION_COST,
+          credits: current.credits - buildCost,
           nextStationId: id + 1,
+          nextVehicleId,
           stations: [...current.stations, station],
-          log: [`Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.`, ...current.log].slice(0, 10),
+          vehicles,
+          log: [
+            isFirstStation
+              ? `Built ${station.name}. Game started with 2 ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and 10 employees.`
+              : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.`,
+            ...current.log,
+          ].slice(0, 10),
         };
       });
     },
@@ -564,10 +554,13 @@ export default function Page() {
 
   function spawnIncident() {
     setGame((current) => {
+      const activeCount = current.incidents.filter(
+        (incident) => incident.status !== "COMPLETE",
+      ).length;
       const available = INCIDENT_TEMPLATES.filter(
         (template) => current.resolvedCount >= template.unlockAt,
       );
-      if (available.length === 0 || current.stations.length === 0) return current;
+      if (available.length === 0 || current.stations.length === 0 || activeCount >= 2) return current;
 
       const station = current.stations[rand(0, current.stations.length - 1)];
       const template = available[rand(0, available.length - 1)];
@@ -818,7 +811,8 @@ export default function Page() {
         ).length;
 
         const shouldSpawn =
-          Math.random() < 0.08 && activeCount < 6 && current.stations.length > 0;
+          current.stations.length > 0 &&
+          (activeCount < 1 || (Math.random() < 0.08 && activeCount < 2));
 
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
@@ -902,6 +896,7 @@ export default function Page() {
               <Coins className="mr-1 h-3 w-3" />
               {game.credits} credits
             </Badge>
+            <Badge>{game.employees} employees</Badge>
 
             <Badge tone="blue">
               <Radio className="mr-1 h-3 w-3" />
@@ -910,7 +905,9 @@ export default function Page() {
 
             <Badge>{completedIncidents.length} closed</Badge>
 
-            <Button onClick={spawnIncident}>Create Call</Button>
+            <Button onClick={spawnIncident} disabled={!hasStarted || activeIncidents.length >= 2}>
+              Create Call
+            </Button>
 
             <Button variant="outline" onClick={resetGame}>
               Reset
@@ -972,7 +969,9 @@ export default function Page() {
                   </div>
 
                   <p className="text-xs text-slate-400">
-                    Click anywhere on map to build a {STATION_TYPES[selectedBuild].label} station ({STATION_COST} credits).
+                    {hasStarted
+                      ? `Click anywhere on map to build a ${STATION_TYPES[selectedBuild].label} station (${STATION_COST} credits).`
+                      : `Place your first ${STATION_TYPES[selectedBuild].label} building for free to start. It begins with 2 vehicles and 10 employees.`}
                   </p>
                 </CardContent>
               </Card>
