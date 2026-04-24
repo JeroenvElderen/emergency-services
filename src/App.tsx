@@ -48,6 +48,7 @@ type Vehicle = {
   eta: number;
   totalEta: number;
   incidentId: number | null;
+  route: [number, number][];
 };
 
 type IncidentStage = {
@@ -84,6 +85,8 @@ type GameState = {
 const STATION_COST = 650;
 const DISPATCH_COST = 18;
 const MAINTENANCE_INTERVAL = 30;
+const MAPBOX_DIRECTIONS_BASE_URL =
+  "https://api.mapbox.com/directions/v5/mapbox/driving";
 
 const STATION_TYPES = {
   FIRE: { label: "Fire", icon: Flame },
@@ -218,6 +221,7 @@ const initialState: GameState = {
       eta: 0,
       totalEta: 0,
       incidentId: null,
+      route: [],
     },
     {
       id: 2,
@@ -228,6 +232,7 @@ const initialState: GameState = {
       eta: 0,
       totalEta: 0,
       incidentId: null,
+      route: [],
     },
     {
       id: 3,
@@ -238,6 +243,7 @@ const initialState: GameState = {
       eta: 0,
       totalEta: 0,
       incidentId: null,
+      route: [],
     },
   ],
   incidents: [],
@@ -273,7 +279,16 @@ function loadGame(): GameState {
 
   try {
     const saved = localStorage.getItem("emergency-services-save-v2");
-    return saved ? (JSON.parse(saved) as GameState) : initialState;
+    if (!saved) return initialState;
+
+    const parsed = JSON.parse(saved) as GameState;
+    return {
+      ...parsed,
+      vehicles: parsed.vehicles.map((vehicle) => ({
+        ...vehicle,
+        route: Array.isArray(vehicle.route) ? vehicle.route : [],
+      })),
+    };
   } catch {
     return initialState;
   }
@@ -281,6 +296,65 @@ function loadGame(): GameState {
 
 function saveGame(state: GameState) {
   localStorage.setItem("emergency-services-save-v2", JSON.stringify(state));
+}
+
+async function fetchRoadRoute(
+  start: { lat: number; lng: number },
+  end: { lat: number; lng: number },
+  token?: string,
+) {
+  if (!token) return null;
+
+  const path = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+  const params = new URLSearchParams({
+    alternatives: "false",
+    geometries: "geojson",
+    overview: "full",
+    steps: "false",
+    access_token: token,
+  });
+
+  try {
+    const response = await fetch(`${MAPBOX_DIRECTIONS_BASE_URL}/${path}?${params.toString()}`);
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      routes?: { distance: number; geometry?: { coordinates?: [number, number][] } }[];
+    };
+    const route = data.routes?.[0];
+    const coordinates = route?.geometry?.coordinates;
+
+    if (!route || !coordinates || coordinates.length < 2) return null;
+
+    return {
+      distanceKm: route.distance / 1000,
+      coordinates,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getRoutePosition(
+  route: [number, number][],
+  progress: number,
+  fallback: { lat: number; lng: number },
+) {
+  if (route.length < 2) return [fallback.lng, fallback.lat] as [number, number];
+  if (progress <= 0) return route[0];
+  if (progress >= 1) return route[route.length - 1];
+
+  const segmentProgress = progress * (route.length - 1);
+  const fromIndex = Math.floor(segmentProgress);
+  const toIndex = Math.min(route.length - 1, fromIndex + 1);
+  const localProgress = segmentProgress - fromIndex;
+  const from = route[fromIndex];
+  const to = route[toIndex];
+
+  return [
+    from[0] + (to[0] - from[0]) * localProgress,
+    from[1] + (to[1] - from[1]) * localProgress,
+  ] as [number, number];
 }
 
 function Badge({
@@ -464,11 +538,8 @@ export default function Page() {
 
       const progress =
         vehicle.totalEta <= 0 ? 1 : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
-      const target = vehicle.status === "DISPATCHED" ? incident : station;
-      const origin = vehicle.status === "DISPATCHED" ? station : incident;
-
-      const lat = origin.lat + (target.lat - origin.lat) * progress;
-      const lng = origin.lng + (target.lng - origin.lng) * progress;
+      const fallback = vehicle.status === "DISPATCHED" ? station : incident;
+      const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {
@@ -528,7 +599,19 @@ export default function Page() {
     });
   }
 
-  function dispatch(vehicleId: number, incidentId: number) {
+  async function dispatch(vehicleId: number, incidentId: number) {
+    const vehicle = game.vehicles.find((v) => v.id === vehicleId);
+    const incident = game.incidents.find((i) => i.id === incidentId);
+    if (!vehicle || !incident) return;
+
+    const station = game.stations.find((s) => s.id === vehicle.stationId);
+    if (!station) return;
+
+    const route = await fetchRoadRoute(station, incident, mapToken);
+    const km = route?.distanceKm ?? haversineKm(station, incident);
+    const speed = VEHICLE_TYPES[vehicle.type].speedKmh;
+    const eta = Math.max(8, Math.round((km / speed) * 3600));
+
     setGame((current) => {
       const vehicle = current.vehicles.find((v) => v.id === vehicleId);
       const incident = current.incidents.find((i) => i.id === incidentId);
@@ -536,10 +619,6 @@ export default function Page() {
 
       const station = current.stations.find((s) => s.id === vehicle.stationId);
       if (!station) return current;
-
-      const km = haversineKm(station, incident);
-      const speed = VEHICLE_TYPES[vehicle.type].speedKmh;
-      const eta = Math.max(8, Math.round((km / speed) * 3600));
 
       return {
         ...current,
@@ -552,6 +631,12 @@ export default function Page() {
                 eta,
                 totalEta: eta,
                 incidentId,
+                route:
+                  route?.coordinates ??
+                  [
+                    [station.lng, station.lat],
+                    [incident.lng, incident.lat],
+                  ],
               }
             : v,
         ),
@@ -564,7 +649,10 @@ export default function Page() {
               }
             : i,
         ),
-        log: [`Dispatched ${vehicle.name} to ${incident.title}. ETA ${eta}s (${km.toFixed(1)} km).`, ...current.log].slice(0, 10),
+        log: [
+          `Dispatched ${vehicle.name} to ${incident.title}. ETA ${eta}s (${km.toFixed(1)} km${route ? ", routed" : ", direct"}).`,
+          ...current.log,
+        ].slice(0, 10),
       };
     });
   }
@@ -593,6 +681,7 @@ export default function Page() {
         eta: 0,
         totalEta: 0,
         incidentId: null,
+        route: [],
       };
 
       return {
@@ -652,6 +741,7 @@ export default function Page() {
               incidentId: null,
               eta: 0,
               totalEta: 0,
+              route: [],
             };
           }
 
@@ -700,6 +790,13 @@ export default function Page() {
                 incidentId: incident.id,
                 eta: returnEta,
                 totalEta: returnEta,
+                route:
+                  vehicle.route.length >= 2
+                    ? [...vehicle.route].reverse()
+                    : [
+                        [incident.lng, incident.lat],
+                        [station.lng, station.lat],
+                      ],
               };
             });
 
