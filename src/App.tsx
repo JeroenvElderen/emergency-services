@@ -152,6 +152,7 @@ const VEHICLE_TYPES = {
     icon: Shield,
   },
 } as const;
+const DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const INCIDENT_TEMPLATES = [
   {
@@ -171,7 +172,7 @@ const INCIDENT_TEMPLATES = [
     unlockAt: 2,
     baseReward: 180,
     stages: [
-      { label: "Extrication", required: ["LADDER", "RESCUE"] },
+       { label: "Extrication", required: ["ENGINE", "RESCUE"] },
       { label: "Transport", required: ["AMBULANCE"] },
     ],
   },
@@ -732,7 +733,7 @@ export default function Page() {
 
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
-        vehicle.status === "DISPATCHED" &&
+        (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
         vehicle.eta > 0 &&
         vehicle.incidentId !== null;
 
@@ -1073,16 +1074,21 @@ export default function Page() {
             .map((id) => nextVehicles.find((v) => v.id === id))
             .filter((v): v is Vehicle => Boolean(v));
 
-          const hasAllRequired = stage.required.every((requiredType) =>
-            assignedVehicles.some(
-              (vehicle) =>
-                vehicle.type === requiredType &&
-                vehicle.status === "DISPATCHED" &&
-                vehicle.eta <= 0,
-            ),
-          );
+          const finalStageComplete =
+            incident.currentStage >= incident.stages.length - 1 &&
+            incident.stageWorkRemaining <= 0;
 
-          if (!hasAllRequired) return incident;
+          if (!finalStageComplete) {
+            const hasAllRequired = stage.required.every((requiredType) =>
+              assignedVehicles.some(
+                (vehicle) =>
+                  vehicle.type === requiredType &&
+                  vehicle.status === "DISPATCHED" &&
+                  vehicle.eta <= 0,
+              ),
+            );
+            if (!hasAllRequired) return incident;
+          }
 
           if (incident.stageWorkRemaining > 0) {
             return {
@@ -1411,7 +1417,11 @@ export default function Page() {
             <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">Buy vehicles</p>
             <div className="mt-1 grid grid-cols-2 gap-1.5">
               {(Object.keys(VEHICLE_TYPES) as VehicleType[])
-                .filter((type) => VEHICLE_TYPES[type].stationType === selectedStation.type)
+                .filter(
+                  (type) =>
+                    VEHICLE_TYPES[type].stationType === selectedStation.type &&
+                    !DISABLED_VEHICLE_TYPES.includes(type),
+                )
                 .map((type) => {
                   const Icon =
                     type === "ENGINE" || type === "LADDER"
