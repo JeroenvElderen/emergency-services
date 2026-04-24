@@ -565,7 +565,12 @@ export default function Page() {
     });
 
     game.vehicles.forEach((vehicle) => {
-      if (vehicle.status === "AVAILABLE") {
+      const shouldRenderVehicle =
+        vehicle.status === "DISPATCHED" &&
+        vehicle.eta > 0 &&
+        vehicle.incidentId !== null;
+
+      if (!shouldRenderVehicle) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         return;
