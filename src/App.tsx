@@ -115,11 +115,11 @@ type GameState = {
 };
 
 const STATION_COST = 120000;
-const DISPATCH_COST = 150;
+const DISPATCH_COST = 90;
 const UPGRADE_BASE_COST = 75000;
-const HIRING_COST = 2800;
+const HIRING_COST = 1600;
 const PAYROLL_INTERVAL = 30;
-const PAYROLL_PER_EMPLOYEE = 140;
+const PAYROLL_PER_EMPLOYEE = 45;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const MAPBOX_DIRECTIONS_BASE_URL =
@@ -1010,7 +1010,7 @@ export default function Page() {
         title: template.title,
         category: template.category,
         severity: difficulty,
-        reward: Math.round(template.baseReward * (1 + (difficulty - 1) * 0.12)),
+        reward: Math.max(650, Math.round(template.baseReward * (1.35 + (difficulty - 1) * 0.14))),
         lat,
         lng,
         status: "OPEN",
@@ -1386,8 +1386,11 @@ export default function Page() {
               title: template.title,
               category: template.category,
               severity: difficulty,
-              reward: Math.round(
-                template.baseReward * (1 + (difficulty - 1) * 0.12),
+              reward: Math.max(
+                650,
+                Math.round(
+                  template.baseReward * (1.35 + (difficulty - 1) * 0.14),
+                ),
               ),
               lat: station.lat + (Math.random() - 0.5) * 0.04,
               lng: station.lng + (Math.random() - 0.5) * 0.04,
