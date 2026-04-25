@@ -5,18 +5,21 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import {
   Ambulance,
+  Building2,
   CarFront,
   Clock3,
   Coins,
   Flame,
   Globe2,
   House,
+  MapPinned,
   Radio,
   Shield,
   Siren,
   Truck,
   UserPlus,
   Users,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -522,6 +525,7 @@ export default function Page() {
   const [selectedStationId, setSelectedStationId] = useState<number | null>(
     null,
   );
+  const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -1022,9 +1026,12 @@ export default function Page() {
       el.title = `${incident.title} (${markerStyle.label})`;
       el.innerHTML = "🔥";
       el.onclick = () => {
-        alert(
-          `${incident.title}\nSeverity ${incident.severity}\nStage: ${incident.stages[incident.currentStage]?.label ?? "Complete"}\nStatus: ${markerStyle.label}`,
-        );
+        setFocusedIncidentId(incident.id);
+        mapRef.current?.flyTo({
+          center: [incident.lng, incident.lat],
+          zoom: Math.max(mapRef.current.getZoom(), 12),
+          essential: true,
+        });
       };
 
       incidentMarkerRefs.current.push(
@@ -1037,14 +1044,61 @@ export default function Page() {
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
         (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
-        vehicle.eta > 0 &&
         vehicle.incidentId !== null;
 
       if (!shouldRenderVehicle) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
-        return;
       }
+
+      if (vehicle.route.length >= 2) {
+        const routeId = `vehicle-route-${vehicle.id}`;
+        const addRouteLayer = () => {
+          if (!mapRef.current) return;
+
+          if (mapRef.current.getLayer(routeId)) {
+            mapRef.current.removeLayer(routeId);
+          }
+
+          if (mapRef.current.getSource(routeId)) {
+            mapRef.current.removeSource(routeId);
+          }
+
+          routeLayerIdsRef.current.push(routeId);
+
+          mapRef.current.addSource(routeId, {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: vehicle.route,
+              },
+              properties: {},
+            },
+          });
+
+          mapRef.current.addLayer({
+            id: routeId,
+            type: "line",
+            source: routeId,
+            paint: {
+              "line-color":
+                vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
+              "line-width": 3,
+              "line-opacity": 0.8,
+            },
+          });
+        };
+
+        if (mapRef.current?.isStyleLoaded()) {
+          addRouteLayer();
+        } else {
+          mapRef.current?.once("load", addRouteLayer);
+        }
+      }
+
+      if (!shouldRenderVehicle) return;
 
       const station = game.stations.find((s) => s.id === vehicle.stationId);
       const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
@@ -1093,53 +1147,6 @@ export default function Page() {
           .setLngLat([lng, lat])
           .addTo(mapRef.current!),
       );
-
-      if (vehicle.route.length >= 2) {
-        const routeId = `vehicle-route-${vehicle.id}`;
-        const addRouteLayer = () => {
-          if (!mapRef.current) return;
-
-          if (mapRef.current.getLayer(routeId)) {
-            mapRef.current.removeLayer(routeId);
-          }
-
-          if (mapRef.current.getSource(routeId)) {
-            mapRef.current.removeSource(routeId);
-          }
-
-          routeLayerIdsRef.current.push(routeId);
-
-          mapRef.current.addSource(routeId, {
-            type: "geojson",
-            data: {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: vehicle.route,
-              },
-              properties: {},
-            },
-          });
-
-          mapRef.current.addLayer({
-            id: routeId,
-            type: "line",
-            source: routeId,
-            paint: {
-              "line-color":
-                vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
-              "line-width": 3,
-              "line-opacity": 0.8,
-            },
-          });
-        };
-
-        if (mapRef.current?.isStyleLoaded()) {
-          addRouteLayer();
-        } else {
-          mapRef.current?.once("load", addRouteLayer);
-        }
-      }
     });
 
     if (isSelectingRealStation) {
@@ -1318,6 +1325,16 @@ export default function Page() {
         ].slice(0, 10),
       };
     });
+  }
+
+  async function dispatchRequiredVehicles(incident: Incident) {
+    for (const requiredType of [...new Set(incident.stages[incident.currentStage]?.required ?? [])]) {
+      const matchingVehicle = game.vehicles.find(
+        (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === requiredType,
+      );
+      if (!matchingVehicle) continue;
+      await dispatch(matchingVehicle.id, incident.id);
+    }
   }
 
   function buyVehicle(stationId: number, type: VehicleType) {
@@ -1761,11 +1778,17 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute left-3 top-3 z-30 w-[250px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-2.5 shadow-2xl backdrop-blur-sm">
-        <div className="flex items-center justify-between">
-          <h1 className="text-sm font-black tracking-tight">
-            Emergency Services
-          </h1>
+      <div className="absolute left-3 top-3 z-30 w-[300px] space-y-3 rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-950/95 to-slate-900/85 p-3 shadow-2xl backdrop-blur-sm">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-300">
+              <Radio className="h-3 w-3" />
+              Dispatch Console
+            </p>
+            <h1 className="text-base font-black tracking-tight">
+              Emergency Services
+            </h1>
+          </div>
           <div className="flex gap-1">
             <Button
               size="sm"
@@ -1794,7 +1817,7 @@ export default function Page() {
             </Button>
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
           <Badge tone="good">
             <Coins className="mr-1 h-3 w-3" />
             {game.credits}
@@ -1803,7 +1826,7 @@ export default function Page() {
             <Users className="mr-1 h-3 w-3" />
             {game.employees} staff
           </Badge>
-          <Badge>
+          <Badge tone="default">
             <Clock3 className="mr-1 h-3 w-3" />
             per mission payroll
           </Badge>
@@ -1881,13 +1904,121 @@ export default function Page() {
             onClick={spawnIncident}
             disabled={!hasStarted || activeIncidents.length >= 2}
           >
-            Create Call
+            New Incident
           </Button>
           <Button size="sm" variant="outline" onClick={resetGame}>
             Reset
           </Button>
         </div>
       </div>
+
+      {selectedStation && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-3">
+          <div className="w-full max-w-2xl rounded-2xl border border-sky-700/60 bg-slate-950/95 p-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-sky-300">
+                  <Building2 className="h-3.5 w-3.5" />
+                  Building Control
+                </p>
+                <h3 className="text-lg font-bold">{selectedStation.name}</h3>
+                <p className="text-xs text-slate-400">
+                  Level {selectedStation.level} • Capacity{" "}
+                  {game.vehicles.filter((vehicle) => vehicle.stationId === selectedStation.id).length}
+                  /{stationCapacity(selectedStation.level)}
+                </p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setSelectedStationId(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs text-slate-200 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-2">
+                <p className="text-slate-400">Employees at station</p>
+                <p className="text-base font-semibold">{stationEmployees[selectedStation.id] ?? 0}</p>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-2">
+                <p className="text-slate-400">Total employees</p>
+                <p className="text-base font-semibold">{game.employees}</p>
+              </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-2">
+                <p className="text-slate-400">Unassigned staff</p>
+                <p className="text-base font-semibold">{unassignedEmployees}</p>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={game.credits < UPGRADE_BASE_COST + selectedStation.level * 25000}
+                onClick={() => upgradeStation(selectedStation.id)}
+              >
+                Upgrade ({UPGRADE_BASE_COST + selectedStation.level * 25000})
+              </Button>
+              <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST} onClick={() => hireEmployee(1)}>
+                <UserPlus className="mr-1 h-3.5 w-3.5" />
+                Hire 1 ({HIRING_COST})
+              </Button>
+              <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST * 5} onClick={() => hireEmployee(5)}>
+                Hire 5 ({HIRING_COST * 5})
+              </Button>
+            </div>
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                Vehicles in station
+              </p>
+              <div className="mb-2 grid gap-1 text-xs text-slate-300 sm:grid-cols-2">
+                {game.vehicles
+                  .filter((vehicle) => vehicle.stationId === selectedStation.id)
+                  .map((vehicle) => (
+                    <p key={vehicle.id} className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1">
+                      {vehicle.name} • {vehicle.status}
+                    </p>
+                  ))}
+              </div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
+                Buy vehicles
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {(Object.keys(VEHICLE_TYPES) as VehicleType[])
+                  .filter(
+                    (type) =>
+                      VEHICLE_TYPES[type].stationType === selectedStation.type &&
+                      !DISABLED_VEHICLE_TYPES.includes(type),
+                  )
+                  .map((type) => {
+                    const config = VEHICLE_TYPES[type];
+                    const usedCapacity = game.vehicles.filter(
+                      (vehicle) => vehicle.stationId === selectedStation.id,
+                    ).length;
+                    const hasCapacity = usedCapacity < stationCapacity(selectedStation.level);
+                    const hasStaff = unassignedEmployees >= config.crew;
+                    const Icon =
+                      type === "ENGINE" || type === "LADDER"
+                        ? Truck
+                        : type === "PATROL" || type === "SWAT"
+                          ? CarFront
+                          : type === "AMBULANCE"
+                            ? Ambulance
+                            : Siren;
+                    return (
+                      <Button
+                        key={`${selectedStation.id}-${type}`}
+                        size="sm"
+                        variant="outline"
+                        disabled={game.credits < config.cost || !hasCapacity || !hasStaff}
+                        onClick={() => buyVehicle(selectedStation.id, type)}
+                      >
+                        <Icon className="mr-1 h-3.5 w-3.5" />
+                        {config.label}
+                      </Button>
+                    );
+                  })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="absolute bottom-3 right-3 z-30 max-h-[52vh] w-[360px] space-y-2 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
         <h2 className="text-sm font-bold">Live Incidents</h2>
@@ -1897,10 +2028,15 @@ export default function Page() {
           activeIncidents.map((incident) => {
             const stage = incident.stages[incident.currentStage];
             const progress = missionProgress(incident);
+            const requiredTypes = [...new Set(stage?.required ?? [])];
             return (
               <div
                 key={incident.id}
-                className="rounded-xl border border-slate-700 bg-slate-900/90 p-2"
+                className={`rounded-xl border p-2 transition ${
+                  focusedIncidentId === incident.id
+                    ? "border-sky-500 bg-sky-950/40"
+                    : "border-slate-700 bg-slate-900/90"
+                }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -1912,6 +2048,30 @@ export default function Page() {
                   <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>
                     {incident.status}
                   </Badge>
+                </div>
+                <div className="mt-2 flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      mapRef.current?.flyTo({
+                        center: [incident.lng, incident.lat],
+                        zoom: Math.max(mapRef.current.getZoom(), 12),
+                        essential: true,
+                      });
+                      setFocusedIncidentId(incident.id);
+                    }}
+                  >
+                    <MapPinned className="mr-1 h-3.5 w-3.5" />
+                    Focus map
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => dispatchRequiredVehicles(incident)}
+                    disabled={game.credits < DISPATCH_COST}
+                  >
+                    Dispatch suggested
+                  </Button>
                 </div>
                 <div className="mt-2">
                   <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
@@ -1937,105 +2097,46 @@ export default function Page() {
                   </span>
                   <span>4) Filing: {Math.round(progress.filing * 100)}%</span>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {[...new Set(stage?.required ?? [])].map((type) => {
+                <div className="mt-2 space-y-1.5">
+                  {requiredTypes.map((type) => {
                     const alreadyAssigned = incident.assignedVehicleIds.some(
                       (id) =>
                         game.vehicles.find((v) => v.id === id)?.type === type,
                     );
-                    const match = game.vehicles.find(
+                    const availableMatches = game.vehicles.filter(
                       (v) => v.status === "AVAILABLE" && v.type === type,
                     );
                     return (
-                      <Button
-                        key={`${incident.id}-${type}`}
-                        size="sm"
-                        disabled={
-                          alreadyAssigned ||
-                          !match ||
-                          game.credits < DISPATCH_COST
-                        }
-                        onClick={() => {
-                          if (match) dispatch(match.id, incident.id);
-                        }}
-                      >
-                        {alreadyAssigned
-                          ? `${type} sent`
-                          : match
-                            ? `Send ${type}`
-                            : `No ${type}`}
-                      </Button>
+                      <div key={`${incident.id}-${type}`} className="rounded-lg border border-slate-700/80 p-1.5">
+                        <p className="mb-1 text-[11px] font-medium text-slate-300">
+                          {type}
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {alreadyAssigned ? (
+                            <Badge tone="good">{type} assigned</Badge>
+                          ) : availableMatches.length === 0 ? (
+                            <Badge tone="bad">No available {type}</Badge>
+                          ) : (
+                            availableMatches.map((vehicle) => (
+                              <Button
+                                key={vehicle.id}
+                                size="sm"
+                                variant="outline"
+                                disabled={game.credits < DISPATCH_COST}
+                                onClick={() => dispatch(vehicle.id, incident.id)}
+                              >
+                                {vehicle.name}
+                              </Button>
+                            ))
+                          )}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
               </div>
             );
           })
-        )}
-
-        {selectedStation && (
-          <div className="rounded-xl border border-sky-700/60 bg-sky-950/40 p-2">
-            <p className="text-xs font-semibold">{selectedStation.name}</p>
-            <p className="text-[11px] text-slate-300">
-              Employees: {stationEmployees[selectedStation.id] ?? 0}
-            </p>
-            <p className="text-[11px] text-slate-300">
-              Unassigned staff: {unassignedEmployees}
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              className="mt-2"
-              disabled={
-                game.credits < UPGRADE_BASE_COST + selectedStation.level * 25000
-              }
-              onClick={() => upgradeStation(selectedStation.id)}
-            >
-              Upgrade ({UPGRADE_BASE_COST + selectedStation.level * 25000})
-            </Button>
-            <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">
-              Buy vehicles
-            </p>
-            <div className="mt-1 grid grid-cols-2 gap-1.5">
-              {(Object.keys(VEHICLE_TYPES) as VehicleType[])
-                .filter(
-                  (type) =>
-                    VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                    !DISABLED_VEHICLE_TYPES.includes(type),
-                )
-                .map((type) => {
-                  const config = VEHICLE_TYPES[type];
-                  const usedCapacity = game.vehicles.filter(
-                    (vehicle) => vehicle.stationId === selectedStation.id,
-                  ).length;
-                  const hasCapacity =
-                    usedCapacity < stationCapacity(selectedStation.level);
-                  const hasStaff = unassignedEmployees >= config.crew;
-                  const Icon =
-                    type === "ENGINE" || type === "LADDER"
-                      ? Truck
-                      : type === "PATROL" || type === "SWAT"
-                        ? CarFront
-                        : type === "AMBULANCE"
-                          ? Ambulance
-                          : Siren;
-                  return (
-                    <Button
-                      key={`${selectedStation.id}-${type}`}
-                      size="sm"
-                      variant="outline"
-                      disabled={
-                        game.credits < config.cost || !hasCapacity || !hasStaff
-                      }
-                      onClick={() => buyVehicle(selectedStation.id, type)}
-                    >
-                      <Icon className="mr-1 h-3.5 w-3.5" />
-                      {config.label}
-                    </Button>
-                  );
-                })}
-            </div>
-          </div>
         )}
 
         <div className="space-y-1">
