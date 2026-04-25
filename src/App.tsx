@@ -234,7 +234,7 @@ const initialState: GameState = {
   employees: 10,
   homeCountryCode: "DE",
   activeCountryCode: "DE",
-  unlockedCountryCodes: ["DE"],
+  unlockedCountryCodes: [],
   nextStationId: 1,
   nextVehicleId: 1,
   nextIncidentId: 1,
@@ -532,22 +532,32 @@ export default function Page() {
   useEffect(() => {
     let mounted = true;
 
-    const loadMissions = async () => {
-      try {
-        const response = await fetch("/missions.json");
-        if (!response.ok) return;
-        const missions = (await response.json()) as MissionDefinition[];
-        if (mounted) setMissionCatalog(missions);
-      } catch {
-        if (mounted) setMissionCatalog([]);
+    const loadMissionsForCountry = async () => {
+      const missionPaths = [
+        `/missions/${game.activeCountryCode}.json`,
+        "/missions/default.json",
+      ];
+
+      for (const path of missionPaths) {
+        try {
+          const response = await fetch(path);
+          if (!response.ok) continue;
+          const missions = (await response.json()) as MissionDefinition[];
+          if (mounted) setMissionCatalog(missions);
+          return;
+        } catch {
+          continue;
+        }
       }
+
+      if (mounted) setMissionCatalog([]);
     };
 
-    void loadMissions();
+    void loadMissionsForCountry();
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [game.activeCountryCode]);
 
   const activeIncidents = game.incidents.filter(
     (incident) => incident.status !== "COMPLETE",
@@ -818,18 +828,33 @@ export default function Page() {
 
     const bounds = map.getBounds();
     if (!bounds) return;
+    const zoom = map.getZoom();
+    const center = map.getCenter();
     const south = bounds.getSouth().toFixed(4);
     const west = bounds.getWest().toFixed(4);
     const north = bounds.getNorth().toFixed(4);
     const east = bounds.getEast().toFixed(4);
+    const aroundClause =
+      zoom < 7
+        ? `around:40000,${center.lat.toFixed(4)},${center.lng.toFixed(4)}`
+        : `${south},${west},${north},${east}`;
 
-    const queryByType: Record<StationType, string> = {
-      FIRE: 'node["amenity"="fire_station"]',
-      EMS: 'node["amenity"="hospital"]',
-      POLICE: 'node["amenity"="police"]',
+    const queryByType: Record<StationType, string[]> = {
+      FIRE: [
+        'nwr["amenity"="fire_station"]',
+        'nwr["emergency"="fire_station"]',
+      ],
+      EMS: [
+        'nwr["amenity"="hospital"]',
+        'nwr["emergency"="ambulance_station"]',
+      ],
+      POLICE: ['nwr["amenity"="police"]'],
     };
 
-    const query = `[out:json][timeout:25];(${queryByType[selectedBuild]}(${south},${west},${north},${east}););out body;`;
+    const typeQuery = queryByType[selectedBuild]
+      .map((selector) => `${selector}(${aroundClause});`)
+      .join("");
+    const query = `[out:json][timeout:25];(${typeQuery});out center tags;`;
 
     try {
       const response = await fetch("https://overpass-api.de/api/interpreter", {
@@ -841,21 +866,30 @@ export default function Page() {
       const data = (await response.json()) as {
         elements?: {
           id: number;
-          lat: number;
-          lon: number;
+          lat?: number;
+          lon?: number;
+          center?: { lat: number; lon: number };
           tags?: { name?: string };
         }[];
       };
       const sites =
-        data.elements?.slice(0, 25).map((item) => ({
-          id: `real-${item.id}`,
-          name:
-            item.tags?.name ??
-            `${STATION_TYPES[selectedBuild].label} Site ${item.id}`,
-          type: selectedBuild,
-          lat: item.lat,
-          lng: item.lon,
-        })) ?? [];
+        data.elements
+          ?.map((item) => {
+            const lat = item.lat ?? item.center?.lat;
+            const lng = item.lon ?? item.center?.lon;
+            if (typeof lat !== "number" || typeof lng !== "number") return null;
+            return {
+              id: `real-${item.id}`,
+              name:
+                item.tags?.name ??
+                `${STATION_TYPES[selectedBuild].label} Site ${item.id}`,
+              type: selectedBuild,
+              lat,
+              lng,
+            };
+          })
+          .filter((item): item is RealStationSite => Boolean(item))
+          .slice(0, 25) ?? [];
       setRealStations(sites);
     } catch {
       setRealStations([]);
@@ -1630,6 +1664,7 @@ export default function Page() {
               {EU_COUNTRIES.map((country) => {
                 const unlocked = game.unlockedCountryCodes.includes(country.code);
                 const isActive = game.activeCountryCode === country.code;
+                const canChooseForFree = !hasStarted;
                 return (
                   <div
                     key={country.code}
@@ -1637,13 +1672,27 @@ export default function Page() {
                   >
                     <p className="text-sm font-semibold">{country.name}</p>
                     <p className="mb-2 text-[11px] text-slate-400">
-                      {unlocked
-                        ? isActive
-                          ? "Active"
-                          : "Unlocked"
-                        : `License cost: ${COUNTRY_LICENSE_COST}`}
+                      {canChooseForFree
+                        ? "Free first country choice"
+                        : unlocked
+                          ? isActive
+                            ? "Active"
+                            : "Unlocked"
+                          : `License cost: ${COUNTRY_LICENSE_COST}`}
                     </p>
-                    {unlocked ? (
+                    {canChooseForFree ? (
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={() => {
+                          selectCountryAsActive(country.code);
+                          flyToCountry(country.code);
+                          setRequiresCountrySelection(false);
+                        }}
+                      >
+                        {isActive ? "Selected for free" : "Choose for free"}
+                      </Button>
+                    ) : unlocked ? (
                       <Button
                         size="sm"
                         className="w-full"
