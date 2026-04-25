@@ -422,6 +422,35 @@ function getRoutePosition(
   ] as [number, number];
 }
 
+function getRemainingRoute(
+  route: [number, number][],
+  progress: number,
+  fallback: { lat: number; lng: number },
+) {
+  if (route.length < 2) {
+    const point = [fallback.lng, fallback.lat] as [number, number];
+    return [point, point] as [number, number][];
+  }
+  if (progress <= 0) return route;
+  if (progress >= 1) {
+    const last = route[route.length - 1];
+    return [last, last] as [number, number][];
+  }
+
+  const segmentProgress = progress * (route.length - 1);
+  const fromIndex = Math.floor(segmentProgress);
+  const toIndex = Math.min(route.length - 1, fromIndex + 1);
+  const localProgress = segmentProgress - fromIndex;
+  const from = route[fromIndex];
+  const to = route[toIndex];
+  const currentPoint = [
+    from[0] + (to[0] - from[0]) * localProgress,
+    from[1] + (to[1] - from[1]) * localProgress,
+  ] as [number, number];
+
+  return [currentPoint, ...route.slice(toIndex)] as [number, number][];
+}
+
 function Badge({
   children,
   tone = "default",
@@ -1051,7 +1080,18 @@ export default function Page() {
         vehicleMarkerRefs.current.delete(vehicle.id);
       }
 
-      if (vehicle.route.length >= 2) {
+      const station = game.stations.find((s) => s.id === vehicle.stationId);
+      const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
+      if (!station || !incident) return;
+      const progress =
+        vehicle.totalEta <= 0
+          ? 1
+          : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
+      const fallback = vehicle.status === "DISPATCHED" ? station : incident;
+      const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
+      const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
+
+      if (shouldRenderVehicle && remainingRoute.length >= 2) {
         const routeId = `vehicle-route-${vehicle.id}`;
         const addRouteLayer = () => {
           if (!mapRef.current) return;
@@ -1072,7 +1112,7 @@ export default function Page() {
               type: "Feature",
               geometry: {
                 type: "LineString",
-                coordinates: vehicle.route,
+                coordinates: remainingRoute,
               },
               properties: {},
             },
@@ -1084,7 +1124,7 @@ export default function Page() {
             source: routeId,
             paint: {
               "line-color":
-                vehicle.status === "RETURNING" ? "#22d3ee" : "#f97316",
+                vehicle.status === "RETURNING" ? "#2563eb" : "#dc2626",
               "line-width": 3,
               "line-opacity": 0.8,
             },
@@ -1099,17 +1139,6 @@ export default function Page() {
       }
 
       if (!shouldRenderVehicle) return;
-
-      const station = game.stations.find((s) => s.id === vehicle.stationId);
-      const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
-      if (!station || !incident) return;
-
-      const progress =
-        vehicle.totalEta <= 0
-          ? 1
-          : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
-      const fallback = vehicle.status === "DISPATCHED" ? station : incident;
-      const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {
