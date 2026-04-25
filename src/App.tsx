@@ -9,6 +9,7 @@ import {
   Clock3,
   Coins,
   Flame,
+  Globe2,
   House,
   Radio,
   Shield,
@@ -103,7 +104,9 @@ type SpawnableMission = {
 type GameState = {
   credits: number;
   employees: number;
-  payrollTicker: number;
+  homeCountryCode: string;
+  activeCountryCode: string;
+  unlockedCountryCodes: string[];
   nextStationId: number;
   nextVehicleId: number;
   nextIncidentId: number;
@@ -118,8 +121,8 @@ const STATION_COST = 120000;
 const DISPATCH_COST = 90;
 const UPGRADE_BASE_COST = 75000;
 const HIRING_COST = 1600;
-const PAYROLL_INTERVAL = 30;
 const PAYROLL_PER_EMPLOYEE = 45;
+const COUNTRY_LICENSE_COST = 300000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const MAPBOX_DIRECTIONS_BASE_URL =
@@ -130,6 +133,49 @@ const STATION_TYPES = {
   EMS: { label: "EMS", icon: Ambulance },
   POLICE: { label: "Police", icon: Shield },
 } as const;
+
+type EuCountry = {
+  code: string;
+  name: string;
+  center: [number, number];
+  zoom: number;
+  bounds: {
+    minLng: number;
+    maxLng: number;
+    minLat: number;
+    maxLat: number;
+  };
+};
+
+const EU_COUNTRIES: EuCountry[] = [
+  { code: "AT", name: "Austria", center: [14.2, 47.6], zoom: 6.5, bounds: { minLng: 9.4, maxLng: 17.2, minLat: 46.2, maxLat: 49.1 } },
+  { code: "BE", name: "Belgium", center: [4.6, 50.8], zoom: 7.5, bounds: { minLng: 2.4, maxLng: 6.4, minLat: 49.4, maxLat: 51.7 } },
+  { code: "BG", name: "Bulgaria", center: [25.3, 42.8], zoom: 6.4, bounds: { minLng: 22.3, maxLng: 28.7, minLat: 41.2, maxLat: 44.3 } },
+  { code: "HR", name: "Croatia", center: [16.8, 45.2], zoom: 6.5, bounds: { minLng: 13.4, maxLng: 19.5, minLat: 42.2, maxLat: 46.6 } },
+  { code: "CY", name: "Cyprus", center: [33.0, 35.1], zoom: 8.2, bounds: { minLng: 32.0, maxLng: 34.9, minLat: 34.4, maxLat: 35.8 } },
+  { code: "CZ", name: "Czechia", center: [15.5, 49.9], zoom: 6.8, bounds: { minLng: 12.0, maxLng: 18.9, minLat: 48.5, maxLat: 51.1 } },
+  { code: "DK", name: "Denmark", center: [10.0, 56.1], zoom: 6.7, bounds: { minLng: 7.8, maxLng: 12.7, minLat: 54.5, maxLat: 57.8 } },
+  { code: "EE", name: "Estonia", center: [25.4, 58.7], zoom: 6.8, bounds: { minLng: 21.7, maxLng: 28.2, minLat: 57.5, maxLat: 59.8 } },
+  { code: "FI", name: "Finland", center: [25.7, 64.3], zoom: 4.8, bounds: { minLng: 20.5, maxLng: 31.8, minLat: 59.7, maxLat: 70.2 } },
+  { code: "FR", name: "France", center: [2.4, 46.3], zoom: 5.2, bounds: { minLng: -5.3, maxLng: 9.8, minLat: 41.1, maxLat: 51.2 } },
+  { code: "DE", name: "Germany", center: [10.4, 51.1], zoom: 5.8, bounds: { minLng: 5.8, maxLng: 15.1, minLat: 47.1, maxLat: 55.1 } },
+  { code: "GR", name: "Greece", center: [22.8, 39.1], zoom: 6, bounds: { minLng: 19.4, maxLng: 28.3, minLat: 34.6, maxLat: 41.9 } },
+  { code: "HU", name: "Hungary", center: [19.3, 47.1], zoom: 7, bounds: { minLng: 16.0, maxLng: 22.9, minLat: 45.7, maxLat: 48.7 } },
+  { code: "IE", name: "Ireland", center: [-8.2, 53.3], zoom: 6.2, bounds: { minLng: -10.8, maxLng: -5.3, minLat: 51.4, maxLat: 55.5 } },
+  { code: "IT", name: "Italy", center: [12.7, 42.9], zoom: 5.5, bounds: { minLng: 6.6, maxLng: 18.7, minLat: 36.6, maxLat: 47.2 } },
+  { code: "LV", name: "Latvia", center: [24.9, 56.9], zoom: 7, bounds: { minLng: 20.9, maxLng: 28.3, minLat: 55.6, maxLat: 58.1 } },
+  { code: "LT", name: "Lithuania", center: [23.8, 55.3], zoom: 7, bounds: { minLng: 20.9, maxLng: 26.9, minLat: 53.9, maxLat: 56.6 } },
+  { code: "LU", name: "Luxembourg", center: [6.1, 49.8], zoom: 8.4, bounds: { minLng: 5.7, maxLng: 6.6, minLat: 49.4, maxLat: 50.2 } },
+  { code: "MT", name: "Malta", center: [14.4, 35.9], zoom: 10, bounds: { minLng: 14.1, maxLng: 14.7, minLat: 35.8, maxLat: 36.1 } },
+  { code: "NL", name: "Netherlands", center: [5.3, 52.2], zoom: 7, bounds: { minLng: 3.2, maxLng: 7.3, minLat: 50.6, maxLat: 53.7 } },
+  { code: "PL", name: "Poland", center: [19.2, 52.1], zoom: 6, bounds: { minLng: 14.1, maxLng: 24.2, minLat: 49.0, maxLat: 54.9 } },
+  { code: "PT", name: "Portugal", center: [-8.0, 39.7], zoom: 6, bounds: { minLng: -9.6, maxLng: -6.1, minLat: 36.8, maxLat: 42.2 } },
+  { code: "RO", name: "Romania", center: [24.9, 45.9], zoom: 6.2, bounds: { minLng: 20.2, maxLng: 29.8, minLat: 43.6, maxLat: 48.3 } },
+  { code: "SK", name: "Slovakia", center: [19.5, 48.7], zoom: 7, bounds: { minLng: 16.8, maxLng: 22.8, minLat: 47.7, maxLat: 49.7 } },
+  { code: "SI", name: "Slovenia", center: [14.9, 46.1], zoom: 7.6, bounds: { minLng: 13.3, maxLng: 16.6, minLat: 45.4, maxLat: 46.9 } },
+  { code: "ES", name: "Spain", center: [-3.7, 40.3], zoom: 5.5, bounds: { minLng: -9.4, maxLng: 3.4, minLat: 35.8, maxLat: 43.9 } },
+  { code: "SE", name: "Sweden", center: [16.0, 62.0], zoom: 4.6, bounds: { minLng: 11.0, maxLng: 24.2, minLat: 55.3, maxLat: 69.2 } },
+];
 
 const VEHICLE_TYPES = {
   ENGINE: {
@@ -186,7 +232,9 @@ const DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 const initialState: GameState = {
   credits: 250000,
   employees: 10,
-  payrollTicker: 0,
+  homeCountryCode: "DE",
+  activeCountryCode: "DE",
+  unlockedCountryCodes: ["DE"],
   nextStationId: 1,
   nextVehicleId: 1,
   nextIncidentId: 1,
@@ -260,6 +308,10 @@ function missionToTemplate(mission: MissionDefinition): SpawnableMission | null 
   };
 }
 
+function findCountry(code: string) {
+  return EU_COUNTRIES.find((country) => country.code === code) ?? EU_COUNTRIES[0];
+}
+
 function loadGame(): GameState {
   if (typeof window === "undefined") return initialState;
 
@@ -268,10 +320,20 @@ function loadGame(): GameState {
     if (!saved) return initialState;
 
     const parsed = JSON.parse(saved) as GameState;
+    const homeCountryCode = parsed.homeCountryCode ?? "DE";
+    const activeCountryCode = parsed.activeCountryCode ?? homeCountryCode;
+    const unlockedCountryCodes = Array.isArray(parsed.unlockedCountryCodes)
+      ? parsed.unlockedCountryCodes
+      : [homeCountryCode];
+
     return {
       ...parsed,
       employees: parsed.employees ?? 10,
-      payrollTicker: parsed.payrollTicker ?? 0,
+      homeCountryCode,
+      activeCountryCode,
+      unlockedCountryCodes: unlockedCountryCodes.includes(homeCountryCode)
+        ? unlockedCountryCodes
+        : [homeCountryCode, ...unlockedCountryCodes],
       incidents: parsed.incidents.map((incident) => ({
         ...incident,
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
@@ -411,6 +473,13 @@ function nudgePointToward(
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
   const [missionCatalog, setMissionCatalog] = useState<MissionDefinition[]>([]);
+  const [requiresCountrySelection, setRequiresCountrySelection] = useState(
+    () => loadGame().stations.length === 0,
+  );
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const [countryPickerMode, setCountryPickerMode] = useState<"initial" | "manage">(
+    "initial",
+  );
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
   const [buildPickerOpen, setBuildPickerOpen] = useState(false);
   const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
@@ -426,6 +495,30 @@ export default function Page() {
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const routeLayerIdsRef = useRef<string[]>([]);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
+  const activeCountry = findCountry(game.activeCountryCode);
+
+  const isWithinCountryBounds = useCallback(
+    (lat: number, lng: number, countryCode: string) => {
+      const country = findCountry(countryCode);
+      return (
+        lat >= country.bounds.minLat &&
+        lat <= country.bounds.maxLat &&
+        lng >= country.bounds.minLng &&
+        lng <= country.bounds.maxLng
+      );
+    },
+    [],
+  );
+
+  const flyToCountry = useCallback((countryCode: string) => {
+    const country = findCountry(countryCode);
+    if (!mapRef.current) return;
+    mapRef.current.flyTo({
+      center: country.center,
+      zoom: country.zoom,
+      essential: true,
+    });
+  }, []);
 
   useEffect(() => {
     saveGame(game);
@@ -473,7 +566,6 @@ export default function Page() {
     0,
   );
   const unassignedEmployees = Math.max(game.employees - staffedEmployees, 0);
-  const payrollDueIn = Math.max(PAYROLL_INTERVAL - game.payrollTicker, 0);
 
   const missionProgress = useCallback(
     (incident: Incident) => {
@@ -602,6 +694,15 @@ export default function Page() {
   const buildStationAt = useCallback(
     (lat: number, lng: number, type: StationType) => {
       setGame((current) => {
+        if (!isWithinCountryBounds(lat, lng, current.activeCountryCode)) {
+          return {
+            ...current,
+            log: [
+              `Cannot build there. Move map inside ${findCountry(current.activeCountryCode).name}.`,
+              ...current.log,
+            ].slice(0, 10),
+          };
+        }
         const isFirstStation = current.stations.length === 0;
         const buildCost = isFirstStation ? 0 : STATION_COST;
         if (current.credits < buildCost) return current;
@@ -666,8 +767,50 @@ export default function Page() {
         };
       });
     },
+    [isWithinCountryBounds],
+  );
+
+  const selectCountryAsActive = useCallback(
+    (countryCode: string) => {
+      setGame((current) => ({
+        ...current,
+        activeCountryCode: countryCode,
+        homeCountryCode:
+          current.stations.length === 0 ? countryCode : current.homeCountryCode,
+        unlockedCountryCodes: current.unlockedCountryCodes.includes(countryCode)
+          ? current.unlockedCountryCodes
+          : [...current.unlockedCountryCodes, countryCode],
+        log: [
+          `Active country set to ${findCountry(countryCode).name}.`,
+          ...current.log,
+        ].slice(0, 10),
+      }));
+      setCountryPickerOpen(false);
+      setCountryPickerMode("manage");
+      setRequiresCountrySelection(false);
+      setBuildPickerOpen(false);
+      setIsSelectingRealStation(false);
+    },
     [],
   );
+
+  const purchaseCountryLicense = useCallback((countryCode: string) => {
+    setGame((current) => {
+      if (current.unlockedCountryCodes.includes(countryCode)) return current;
+      if (current.credits < COUNTRY_LICENSE_COST) return current;
+
+      return {
+        ...current,
+        credits: current.credits - COUNTRY_LICENSE_COST,
+        unlockedCountryCodes: [...current.unlockedCountryCodes, countryCode],
+        activeCountryCode: countryCode,
+        log: [
+          `Purchased ${findCountry(countryCode).name} license for ${COUNTRY_LICENSE_COST}.`,
+          ...current.log,
+        ].slice(0, 10),
+      };
+    });
+  }, []);
 
   const loadRealStations = useCallback(async () => {
     const map = mapRef.current;
@@ -727,8 +870,8 @@ export default function Page() {
     mapRef.current = new mapboxgl.Map({
       container: mapContainerRef.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [-122.43, 37.774],
-      zoom: 11.2,
+      center: activeCountry.center,
+      zoom: activeCountry.zoom,
       attributionControl: false,
     });
 
@@ -746,7 +889,11 @@ export default function Page() {
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [mapToken]);
+  }, [activeCountry.center, activeCountry.zoom, mapToken]);
+
+  useEffect(() => {
+    flyToCountry(game.activeCountryCode);
+  }, [flyToCountry, game.activeCountryCode]);
 
   useEffect(() => {
     if (!isSelectingRealStation) return;
@@ -1189,6 +1336,9 @@ export default function Page() {
   function resetGame() {
     localStorage.removeItem("emergency-services-save-v2");
     setGame(initialState);
+    setRequiresCountrySelection(true);
+    setCountryPickerMode("initial");
+    setCountryPickerOpen(false);
   }
 
   useEffect(() => {
@@ -1309,9 +1459,14 @@ export default function Page() {
               ? Math.max(incident.filingRemaining - 1, 0)
               : incident.filingRemaining;
             if (allBackAtStation && nextFiling === 0) {
-              creditsEarned += incident.reward;
+              const missionCrewCost = assignedVehicles.reduce(
+                (sum, vehicle) =>
+                  sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
+                0,
+              );
+              creditsEarned += incident.reward - missionCrewCost;
               progressNotes.push(
-                `${incident.title} completed (+${incident.reward}).`,
+                `${incident.title} completed (+${incident.reward}, payroll -${missionCrewCost}).`,
               );
               return {
                 ...incident,
@@ -1350,19 +1505,12 @@ export default function Page() {
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
         let nextResolvedCount = current.resolvedCount;
-        let nextCredits = current.credits + creditsEarned;
-        const nextPayrollTicker = current.payrollTicker + 1;
+        const nextCredits = current.credits + creditsEarned;
 
         if (creditsEarned > 0) {
           nextResolvedCount +=
             nextIncidents.filter((i) => i.status === "COMPLETE").length -
             current.incidents.filter((i) => i.status === "COMPLETE").length;
-        }
-
-        if (nextPayrollTicker >= PAYROLL_INTERVAL) {
-          const payrollCost = current.employees * PAYROLL_PER_EMPLOYEE;
-          nextCredits -= payrollCost;
-          progressNotes.unshift(`Payroll paid: ${payrollCost}.`);
         }
 
         if (shouldSpawn) {
@@ -1381,6 +1529,7 @@ export default function Page() {
               Math.floor(
                 (nextResolvedCount + current.stations.length) / 4,
               );
+            const { lat, lng } = pickIncidentLocation(station);
             const incident: Incident = {
               id: nextIncidentId,
               title: template.title,
@@ -1392,8 +1541,8 @@ export default function Page() {
                   template.baseReward * (1.35 + (difficulty - 1) * 0.14),
                 ),
               ),
-              lat: station.lat + (Math.random() - 0.5) * 0.04,
-              lng: station.lng + (Math.random() - 0.5) * 0.04,
+              lat,
+              lng,
               status: "OPEN",
               currentStage: 0,
               stages: template.stages,
@@ -1412,7 +1561,6 @@ export default function Page() {
         return {
           ...current,
           credits: nextCredits,
-          payrollTicker: nextPayrollTicker >= PAYROLL_INTERVAL ? 0 : nextPayrollTicker,
           resolvedCount: nextResolvedCount,
           nextIncidentId,
           vehicles: nextVehicles,
@@ -1423,7 +1571,7 @@ export default function Page() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [chooseIncidentTemplates]);
+  }, [chooseIncidentTemplates, pickIncidentLocation]);
 
   const stationEmployees = useMemo(() => {
     if (game.stations.length === 0) return {} as Record<number, number>;
@@ -1454,22 +1602,109 @@ export default function Page() {
         </div>
       )}
 
+      {(countryPickerOpen || requiresCountrySelection) && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <div className="max-h-[80vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-bold">
+                  {(requiresCountrySelection || countryPickerMode === "initial")
+                    ? "Select your starting country"
+                    : "Country licenses"}
+                </p>
+                <p className="text-xs text-slate-400">
+                  Build stations only inside your active country borders.
+                </p>
+              </div>
+              {!requiresCountrySelection && countryPickerMode !== "initial" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setCountryPickerOpen(false)}
+                >
+                  Close
+                </Button>
+              )}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {EU_COUNTRIES.map((country) => {
+                const unlocked = game.unlockedCountryCodes.includes(country.code);
+                const isActive = game.activeCountryCode === country.code;
+                return (
+                  <div
+                    key={country.code}
+                    className="rounded-lg border border-slate-700 bg-slate-950/70 p-2"
+                  >
+                    <p className="text-sm font-semibold">{country.name}</p>
+                    <p className="mb-2 text-[11px] text-slate-400">
+                      {unlocked
+                        ? isActive
+                          ? "Active"
+                          : "Unlocked"
+                        : `License cost: ${COUNTRY_LICENSE_COST}`}
+                    </p>
+                    {unlocked ? (
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        variant={isActive ? "outline" : "default"}
+                        onClick={() => {
+                          selectCountryAsActive(country.code);
+                          flyToCountry(country.code);
+                        }}
+                      >
+                        {isActive ? "Active country" : "Set as active"}
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={() => purchaseCountryLicense(country.code)}
+                        disabled={game.credits < COUNTRY_LICENSE_COST}
+                      >
+                        Buy license
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="absolute left-3 top-3 z-30 w-[250px] space-y-2 rounded-2xl border border-slate-700/70 bg-slate-950/80 p-2.5 shadow-2xl backdrop-blur-sm">
         <div className="flex items-center justify-between">
           <h1 className="text-sm font-black tracking-tight">
             Emergency Services
           </h1>
-          <Button
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => {
-              setBuildPickerOpen((open) => !open);
-              setIsSelectingRealStation(false);
-            }}
-            title="Buy building"
-          >
-            +
-          </Button>
+          <div className="flex gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2"
+              onClick={() => {
+                setCountryPickerMode("manage");
+                setCountryPickerOpen(true);
+                setBuildPickerOpen(false);
+                setIsSelectingRealStation(false);
+              }}
+              title="Manage countries"
+            >
+              <Globe2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 w-7 p-0"
+              onClick={() => {
+                setBuildPickerOpen((open) => !open);
+                setIsSelectingRealStation(false);
+              }}
+              title="Buy building"
+            >
+              +
+            </Button>
+          </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
           <Badge tone="good">
@@ -1482,8 +1717,9 @@ export default function Page() {
           </Badge>
           <Badge>
             <Clock3 className="mr-1 h-3 w-3" />
-            payroll {payrollDueIn}s
+            per mission payroll
           </Badge>
+          <Badge>{activeCountry.name}</Badge>
           <Badge tone="blue">
             <Radio className="mr-1 h-3 w-3" />
             {activeIncidents.length} open
@@ -1520,6 +1756,17 @@ export default function Page() {
               onClick={() => setIsSelectingRealStation(true)}
             >
               Select real station on map
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 w-full"
+              onClick={() => {
+                setCountryPickerMode("manage");
+                setCountryPickerOpen(true);
+              }}
+            >
+              Change / buy country license
             </Button>
             <p className="mt-1 text-[11px] text-slate-400">
               {hasStarted
