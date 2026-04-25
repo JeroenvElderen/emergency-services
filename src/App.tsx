@@ -90,7 +90,7 @@ type MissionDefinition = {
   name: string;
   average_credits: number;
   requirements: Partial<Record<string, number>>;
-  prerequisites: Partial<Record<string, number>>;
+  prerequisites?: Partial<Record<string, number>>;
   mission_categories: string[];
 };
 
@@ -443,11 +443,46 @@ function Badge({
   );
 }
 
-const categoryColor: Record<IncidentCategory, string> = {
-  FIRE: "bg-rose-500",
-  EMS: "bg-emerald-500",
-  POLICE: "bg-sky-500",
+type IncidentMarkerPhase =
+  | "UNTOUCHED"
+  | "EN_ROUTE"
+  | "ON_SCENE"
+  | "RETURNING"
+  | "FILING";
+
+const INCIDENT_MARKER_PHASE_STYLES: Record<
+  IncidentMarkerPhase,
+  { label: string; background: string }
+> = {
+  UNTOUCHED: { label: "Nothing dispatched yet", background: "#dc2626" },
+  EN_ROUTE: { label: "Truck en route", background: "#f59e0b" },
+  ON_SCENE: { label: "Truck on scene", background: "#16a34a" },
+  RETURNING: { label: "Truck returning", background: "#2563eb" },
+  FILING: { label: "Filing report", background: "#6b7280" },
 };
+
+function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
+  const assigned = vehicles.filter((vehicle) => vehicle.incidentId === incident.id);
+  const hasReturning = assigned.some((vehicle) => vehicle.status === "RETURNING");
+  if (hasReturning) return "RETURNING" as const;
+
+  const isFilingStage =
+    incident.currentStage >= incident.stages.length - 1 &&
+    incident.stageWorkRemaining <= 0;
+  if (isFilingStage) return "FILING" as const;
+
+  const hasOnScene = assigned.some(
+    (vehicle) => vehicle.status === "DISPATCHED" && vehicle.eta <= 0,
+  );
+  if (hasOnScene) return "ON_SCENE" as const;
+
+  const hasEnRoute = assigned.some(
+    (vehicle) => vehicle.status === "DISPATCHED" && vehicle.eta > 0,
+  );
+  if (hasEnRoute) return "EN_ROUTE" as const;
+
+  return "UNTOUCHED" as const;
+}
 
 function nudgePointToward(
   from: { lat: number; lng: number },
@@ -979,12 +1014,16 @@ export default function Page() {
 
     activeIncidents.forEach((incident) => {
       const el = document.createElement("button");
-      el.className = `flex h-6 w-6 items-center justify-center rounded-full border-2 border-slate-950 ${categoryColor[incident.category]} text-white shadow-lg`;
-      el.title = `${incident.title} (${incident.stages[incident.currentStage]?.label ?? "Done"})`;
-      el.innerHTML = "⚠";
+      const phase = getIncidentMarkerPhase(incident, game.vehicles);
+      const markerStyle = INCIDENT_MARKER_PHASE_STYLES[phase];
+      el.className =
+        "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 text-white shadow-lg";
+      el.style.backgroundColor = markerStyle.background;
+      el.title = `${incident.title} (${markerStyle.label})`;
+      el.innerHTML = "🔥";
       el.onclick = () => {
         alert(
-          `${incident.title}\nSeverity ${incident.severity}\nStage: ${incident.stages[incident.currentStage]?.label ?? "Complete"}`,
+          `${incident.title}\nSeverity ${incident.severity}\nStage: ${incident.stages[incident.currentStage]?.label ?? "Complete"}\nStatus: ${markerStyle.label}`,
         );
       };
 
@@ -1149,7 +1188,7 @@ export default function Page() {
 
       return missionCatalog
         .filter((mission) => {
-          const prereq = mission.prerequisites;
+          const prereq = mission.prerequisites ?? {};
           if ((prereq.fire_stations ?? 0) > fireStations) return false;
           if ((prereq.ambulance_stations ?? 0) > ambulanceStations) return false;
           if ((prereq.police_stations ?? 0) > policeStations) return false;
