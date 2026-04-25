@@ -84,6 +84,7 @@ type Incident = {
 type GameState = {
   credits: number;
   employees: number;
+  payrollTicker: number;
   nextStationId: number;
   nextVehicleId: number;
   nextIncidentId: number;
@@ -536,6 +537,43 @@ export default function Page() {
     [game.vehicles],
   );
 
+  const isWaterFeature = useCallback((feature: mapboxgl.MapboxGeoJSONFeature) => {
+    const layerId = feature.layer?.id?.toLowerCase() ?? "";
+    const sourceLayer = feature.sourceLayer?.toLowerCase() ?? "";
+    const featureClass = String(feature.properties?.class ?? "").toLowerCase();
+    const featureType = String(feature.properties?.type ?? "").toLowerCase();
+
+    return (
+      layerId.includes("water") ||
+      sourceLayer.includes("water") ||
+      featureClass.includes("water") ||
+      featureType.includes("water")
+    );
+  }, []);
+
+  const pickIncidentLocation = useCallback(
+    (station: Station) => {
+      const map = mapRef.current;
+      const maxOffset = 0.04;
+      const maxAttempts = 25;
+
+      if (!map || !map.isStyleLoaded()) {
+        return { lat: station.lat, lng: station.lng };
+      }
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const lat = station.lat + (Math.random() - 0.5) * maxOffset;
+        const lng = station.lng + (Math.random() - 0.5) * maxOffset;
+        const rendered = map.queryRenderedFeatures(map.project([lng, lat]));
+        const intersectsWater = rendered.some(isWaterFeature);
+        if (!intersectsWater) return { lat, lng };
+      }
+
+      return { lat: station.lat, lng: station.lng };
+    },
+    [isWaterFeature],
+  );
+
   const buildStationAt = useCallback(
     (lat: number, lng: number, type: StationType) => {
       setGame((current) => {
@@ -928,8 +966,7 @@ export default function Page() {
       const template = available[rand(0, available.length - 1)];
       const difficulty = 1 + Math.floor(current.resolvedCount / 3);
 
-      const lat = station.lat + (Math.random() - 0.5) * 0.04;
-      const lng = station.lng + (Math.random() - 0.5) * 0.04;
+      const { lat, lng } = pickIncidentLocation(station);
 
       const incident: Incident = {
         id: current.nextIncidentId,
