@@ -1,0 +1,116 @@
+[
+  {
+    "id": "100",
+    "name": "Bus Stop Waste Bin Fire",
+    "place": "Transit Stop",
+    "place_array": ["Transit Stop"],
+    "average_credits": 480,
+    "generated_by": "",
+    "icons": [
+      "/images/fire_gruen.png",
+      "/images/fire_gelb.png",
+      "/images/fire_rot.png"
+    ],
+    "requirements": { "firetrucks": 1 },
+    "chances": {},
+    "additional": { "filter_id": "firehouse_missions" },
+    "prerequisites": { "main_building": 0, "fire_stations": 1 },
+    "overlay_index": null,
+    "base_mission_id": 100,
+    "additive_overlays": "",
+    "mission_categories": ["fire", "urban"]
+  },
+  {
+    "id": "101",
+    "name": "Warehouse Loading Dock Fire",
+    "place": "Industrial Area",
+    "place_array": ["Industrial Area"],
+    "average_credits": 1350,
+    "generated_by": "",
+    "icons": [
+      "/images/fire_gruen.png",
+      "/images/fire_gelb.png",
+      "/images/fire_rot.png"
+    ],
+    "requirements": { "firetrucks": 2, "platform_trucks": 1 },
+    "chances": { "platform_trucks": 80 },
+    "additional": { "filter_id": "firehouse_missions" },
+    "prerequisites": { "main_building": 0, "fire_stations": 5 },
+    "overlay_index": null,
+    "base_mission_id": 101,
+    "additive_overlays": "",
+    "mission_categories": ["fire", "urban"]
+  },
+  {
+    "id": "102",
+    "name": "Highway Multi-Car Collision",
+    "place": "Highway",
+    "place_array": ["Highway"],
+    "average_credits": 1600,
+    "generated_by": "",
+    "icons": [
+      "/images/fire_gruen.png",
+      "/images/fire_gelb.png",
+      "/images/fire_rot.png"
+    ],
+    "requirements": { "ambulances": 1, "rescue_vehicles": 1, "police_cars": 1 },
+    "chances": { "rescue_vehicles": 65 },
+    "additional": { "filter_id": "ems_missions" },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 3,
+      "ambulance_stations": 2,
+      "police_stations": 1
+    },
+    "overlay_index": null,
+    "base_mission_id": 102,
+    "additive_overlays": "",
+    "mission_categories": ["ems", "urban"]
+  },
+  {
+    "id": "103",
+    "name": "Downtown Disturbance",
+    "place": "City Center",
+    "place_array": ["City Center"],
+    "average_credits": 900,
+    "generated_by": "",
+    "icons": [
+      "/images/fire_gruen.png",
+      "/images/fire_gelb.png",
+      "/images/fire_rot.png"
+    ],
+    "requirements": { "police_cars": 1 },
+    "chances": {},
+    "additional": { "filter_id": "police_missions" },
+    "prerequisites": { "main_building": 0, "police_stations": 1 },
+    "overlay_index": null,
+    "base_mission_id": 103,
+    "additive_overlays": "",
+    "mission_categories": ["police", "urban"]
+  },
+  {
+    "id": "104",
+    "name": "Armed Suspect Barricade",
+    "place": "Residential Block",
+    "place_array": ["Residential Block"],
+    "average_credits": 1900,
+    "generated_by": "",
+    "icons": [
+      "/images/fire_gruen.png",
+      "/images/fire_gelb.png",
+      "/images/fire_rot.png"
+    ],
+    "requirements": { "police_cars": 2, "swat": 1, "ambulances": 1 },
+    "chances": { "swat": 70 },
+    "additional": { "filter_id": "police_missions" },
+    "prerequisites": {
+      "main_building": 0,
+      "police_stations": 5,
+      "ambulance_stations": 1
+    },
+    "overlay_index": null,
+    "base_mission_id": 104,
+    "additive_overlays": "",
+    "mission_categories": ["police", "urban"]
+  }
+]

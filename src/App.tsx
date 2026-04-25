@@ -6,6 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import {
   Ambulance,
   CarFront,
+  Clock3,
   Coins,
   Flame,
   House,
@@ -13,6 +14,8 @@ import {
   Shield,
   Siren,
   Truck,
+  UserPlus,
+  Users,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -81,6 +84,22 @@ type Incident = {
   filingTotal: number;
 };
 
+type MissionDefinition = {
+  id: string;
+  name: string;
+  average_credits: number;
+  requirements: Partial<Record<string, number>>;
+  prerequisites: Partial<Record<string, number>>;
+  mission_categories: string[];
+};
+
+type SpawnableMission = {
+  title: string;
+  category: IncidentCategory;
+  baseReward: number;
+  stages: IncidentStage[];
+};
+
 type GameState = {
   credits: number;
   employees: number;
@@ -95,9 +114,12 @@ type GameState = {
   log: string[];
 };
 
-const STATION_COST = 650;
-const DISPATCH_COST = 18;
-const MAINTENANCE_INTERVAL = 30;
+const STATION_COST = 120000;
+const DISPATCH_COST = 150;
+const UPGRADE_BASE_COST = 75000;
+const HIRING_COST = 2800;
+const PAYROLL_INTERVAL = 30;
+const PAYROLL_PER_EMPLOYEE = 140;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const MAPBOX_DIRECTIONS_BASE_URL =
@@ -113,117 +135,58 @@ const VEHICLE_TYPES = {
   ENGINE: {
     label: "Engine",
     stationType: "FIRE",
-    cost: 300,
+    cost: 75000,
     speedKmh: 55,
+    crew: 4,
     icon: Flame,
   },
   LADDER: {
     label: "Ladder",
     stationType: "FIRE",
-    cost: 420,
+    cost: 120000,
     speedKmh: 48,
+    crew: 5,
     icon: Truck,
   },
   AMBULANCE: {
     label: "Ambulance",
     stationType: "EMS",
-    cost: 250,
+    cost: 190000,
     speedKmh: 65,
+    crew: 2,
     icon: Ambulance,
   },
   RESCUE: {
     label: "Rescue",
     stationType: "EMS",
-    cost: 360,
+    cost: 140000,
     speedKmh: 62,
+    crew: 3,
     icon: Siren,
   },
   PATROL: {
     label: "Patrol",
     stationType: "POLICE",
-    cost: 220,
+    cost: 45000,
     speedKmh: 70,
+    crew: 1,
     icon: Shield,
   },
   SWAT: {
     label: "SWAT",
     stationType: "POLICE",
-    cost: 480,
+    cost: 90000,
     speedKmh: 58,
+    crew: 4,
     icon: Shield,
   },
 } as const;
 const DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
-const INCIDENT_TEMPLATES = [
-  {
-    title: "Structure Fire",
-    category: "FIRE",
-    unlockAt: 0,
-    baseReward: 140,
-    stages: [
-      { label: "Fire Suppression", required: ["ENGINE"] },
-      { label: "Patient Treatment", required: ["AMBULANCE"] },
-      { label: "Traffic Control", required: ["PATROL"] },
-    ],
-  },
-  {
-    title: "Vehicle Entrapment",
-    category: "EMS",
-    unlockAt: 2,
-    baseReward: 180,
-    stages: [
-      { label: "Extrication", required: ["ENGINE", "RESCUE"] },
-      { label: "Transport", required: ["AMBULANCE"] },
-    ],
-  },
-  {
-    title: "Active Threat",
-    category: "POLICE",
-    unlockAt: 5,
-    baseReward: 220,
-    stages: [
-      { label: "Containment", required: ["PATROL", "SWAT"] },
-      { label: "Medical Standby", required: ["AMBULANCE"] },
-    ],
-  },
-] satisfies {
-  title: string;
-  category: IncidentCategory;
-  unlockAt: number;
-  baseReward: number;
-  stages: IncidentStage[];
-}[];
-
-const STARTER_INCIDENT_TEMPLATES = [
-  {
-    title: "Small Kitchen Fire",
-    category: "FIRE",
-    baseReward: 120,
-    stages: [{ label: "Initial Attack", required: ["ENGINE"] }],
-  },
-  {
-    title: "Medical Emergency",
-    category: "EMS",
-    baseReward: 120,
-    stages: [{ label: "Patient Care", required: ["AMBULANCE"] }],
-  },
-  {
-    title: "Public Disturbance",
-    category: "POLICE",
-    baseReward: 120,
-    stages: [{ label: "On-scene Response", required: ["PATROL"] }],
-  },
-] satisfies {
-  title: string;
-  category: IncidentCategory;
-  baseReward: number;
-  stages: IncidentStage[];
-}[];
-
 const initialState: GameState = {
-  credits: 900,
+  credits: 250000,
   employees: 10,
+  payrollTicker: 0,
   nextStationId: 1,
   nextVehicleId: 1,
   nextIncidentId: 1,
@@ -253,14 +216,48 @@ function haversineKm(
 }
 
 function stationCapacity(level: number) {
-  void level;
-  return 2;
+  return 4 + (level - 1) * 2;
 }
 
 function starterVehicleType(stationType: StationType): VehicleType {
   if (stationType === "FIRE") return "ENGINE";
   if (stationType === "EMS") return "AMBULANCE";
   return "PATROL";
+}
+
+const REQUIREMENT_TO_VEHICLE: Record<string, VehicleType> = {
+  firetrucks: "ENGINE",
+  platform_trucks: "LADDER",
+  ambulances: "AMBULANCE",
+  rescue_vehicles: "RESCUE",
+  police_cars: "PATROL",
+  swat: "SWAT",
+};
+
+const MISSION_CATEGORY_TO_INCIDENT: Record<string, IncidentCategory> = {
+  fire: "FIRE",
+  ems: "EMS",
+  police: "POLICE",
+};
+
+function missionToTemplate(mission: MissionDefinition): SpawnableMission | null {
+  const requiredTypes = Object.entries(mission.requirements)
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .map(([key]) => REQUIREMENT_TO_VEHICLE[key])
+    .filter((vehicleType): vehicleType is VehicleType => Boolean(vehicleType));
+  if (requiredTypes.length === 0) return null;
+
+  const category = mission.mission_categories
+    .map((value) => MISSION_CATEGORY_TO_INCIDENT[value])
+    .find((value): value is IncidentCategory => Boolean(value));
+  if (!category) return null;
+
+  return {
+    title: mission.name,
+    category,
+    baseReward: mission.average_credits,
+    stages: [{ label: "Primary Response", required: [...new Set(requiredTypes)] }],
+  };
 }
 
 function loadGame(): GameState {
@@ -274,6 +271,7 @@ function loadGame(): GameState {
     return {
       ...parsed,
       employees: parsed.employees ?? 10,
+      payrollTicker: parsed.payrollTicker ?? 0,
       incidents: parsed.incidents.map((incident) => ({
         ...incident,
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
@@ -412,6 +410,7 @@ function nudgePointToward(
 
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
+  const [missionCatalog, setMissionCatalog] = useState<MissionDefinition[]>([]);
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
   const [buildPickerOpen, setBuildPickerOpen] = useState(false);
   const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
@@ -437,6 +436,26 @@ export default function Page() {
     return () => clearInterval(autosave);
   }, [game]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    const loadMissions = async () => {
+      try {
+        const response = await fetch("/missions.json");
+        if (!response.ok) return;
+        const missions = (await response.json()) as MissionDefinition[];
+        if (mounted) setMissionCatalog(missions);
+      } catch {
+        if (mounted) setMissionCatalog([]);
+      }
+    };
+
+    void loadMissions();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const activeIncidents = game.incidents.filter(
     (incident) => incident.status !== "COMPLETE",
   );
@@ -449,6 +468,12 @@ export default function Page() {
   const completedIncidents = game.incidents.filter(
     (incident) => incident.status === "COMPLETE",
   );
+  const staffedEmployees = game.vehicles.reduce(
+    (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
+    0,
+  );
+  const unassignedEmployees = Math.max(game.employees - staffedEmployees, 0);
+  const payrollDueIn = Math.max(PAYROLL_INTERVAL - game.payrollTicker, 0);
 
   const missionProgress = useCallback(
     (incident: Incident) => {
@@ -932,22 +957,33 @@ export default function Page() {
     selectedBuild,
   ]);
 
-  const chooseIncidentTemplates = useCallback((state: GameState) => {
-    if (state.stations.length !== 1) {
-      return INCIDENT_TEMPLATES.filter(
-        (template) => state.resolvedCount >= template.unlockAt,
-      );
-    }
+  const chooseIncidentTemplates = useCallback(
+    (state: GameState) => {
+      if (missionCatalog.length === 0) return [] as SpawnableMission[];
 
-    const availableTypes = new Set(
-      state.vehicles.map((vehicle) => vehicle.type),
-    );
-    return STARTER_INCIDENT_TEMPLATES.filter((template) =>
-      template.stages[0].required.every((requiredType) =>
-        availableTypes.has(requiredType),
-      ),
-    );
-  }, []);
+      const fireStations = state.stations.filter((s) => s.type === "FIRE").length;
+      const ambulanceStations = state.stations.filter((s) => s.type === "EMS").length;
+      const policeStations = state.stations.filter((s) => s.type === "POLICE").length;
+      const availableVehicleTypes = new Set(state.vehicles.map((vehicle) => vehicle.type));
+
+      return missionCatalog
+        .filter((mission) => {
+          const prereq = mission.prerequisites;
+          if ((prereq.fire_stations ?? 0) > fireStations) return false;
+          if ((prereq.ambulance_stations ?? 0) > ambulanceStations) return false;
+          if ((prereq.police_stations ?? 0) > policeStations) return false;
+          return true;
+        })
+        .map(missionToTemplate)
+        .filter((template): template is SpawnableMission => Boolean(template))
+        .filter((template) =>
+          template.stages[0].required.every((requiredType) =>
+            availableVehicleTypes.has(requiredType),
+          ),
+        );
+    },
+    [missionCatalog],
+  );
 
   function spawnIncident() {
     setGame((current) => {
@@ -964,7 +1000,8 @@ export default function Page() {
 
       const station = current.stations[rand(0, current.stations.length - 1)];
       const template = available[rand(0, available.length - 1)];
-      const difficulty = 1 + Math.floor(current.resolvedCount / 3);
+      const difficulty =
+        1 + Math.floor((current.resolvedCount + current.stations.length) / 4);
 
       const { lat, lng } = pickIncidentLocation(station);
 
@@ -973,7 +1010,7 @@ export default function Page() {
         title: template.title,
         category: template.category,
         severity: difficulty,
-        reward: template.baseReward + difficulty * 35,
+        reward: Math.round(template.baseReward * (1 + (difficulty - 1) * 0.12)),
         lat,
         lng,
         status: "OPEN",
@@ -1075,6 +1112,11 @@ export default function Page() {
       ) {
         return current;
       }
+      const staffed = current.vehicles.reduce(
+        (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
+        0,
+      );
+      if (current.employees - staffed < config.crew) return current;
       const used = current.vehicles.filter(
         (v) => v.stationId === station.id,
       ).length;
@@ -1110,7 +1152,7 @@ export default function Page() {
     setGame((current) => {
       const station = current.stations.find((s) => s.id === stationId);
       if (!station) return current;
-      const cost = 260 + station.level * 200;
+      const cost = UPGRADE_BASE_COST + station.level * 25000;
       if (current.credits < cost) return current;
 
       return {
@@ -1123,6 +1165,23 @@ export default function Page() {
           `Upgraded ${station.name} to level ${station.level + 1}.`,
           ...current.log,
         ].slice(0, 10),
+      };
+    });
+  }
+
+  function hireEmployee(amount = 1) {
+    setGame((current) => {
+      const hireCost = HIRING_COST * amount;
+      if (current.credits < hireCost) return current;
+
+      return {
+        ...current,
+        credits: current.credits - hireCost,
+        employees: current.employees + amount,
+        log: [`Hired ${amount} employee${amount > 1 ? "s" : ""}.`, ...current.log].slice(
+          0,
+          10,
+        ),
       };
     });
   }
@@ -1292,6 +1351,7 @@ export default function Page() {
         let nextIncidentId = current.nextIncidentId;
         let nextResolvedCount = current.resolvedCount;
         let nextCredits = current.credits + creditsEarned;
+        const nextPayrollTicker = current.payrollTicker + 1;
 
         if (creditsEarned > 0) {
           nextResolvedCount +=
@@ -1299,13 +1359,10 @@ export default function Page() {
             current.incidents.filter((i) => i.status === "COMPLETE").length;
         }
 
-        if (
-          current.nextIncidentId > 0 &&
-          current.nextIncidentId % MAINTENANCE_INTERVAL === 0
-        ) {
-          const maintenance = current.vehicles.length * 4;
-          nextCredits -= maintenance;
-          progressNotes.unshift(`Maintenance costs paid: ${maintenance}.`);
+        if (nextPayrollTicker >= PAYROLL_INTERVAL) {
+          const payrollCost = current.employees * PAYROLL_PER_EMPLOYEE;
+          nextCredits -= payrollCost;
+          progressNotes.unshift(`Payroll paid: ${payrollCost}.`);
         }
 
         if (shouldSpawn) {
@@ -1319,13 +1376,19 @@ export default function Page() {
             const station =
               current.stations[rand(0, current.stations.length - 1)];
             const template = available[rand(0, available.length - 1)];
-            const difficulty = 1 + Math.floor(nextResolvedCount / 3);
+            const difficulty =
+              1 +
+              Math.floor(
+                (nextResolvedCount + current.stations.length) / 4,
+              );
             const incident: Incident = {
               id: nextIncidentId,
               title: template.title,
               category: template.category,
               severity: difficulty,
-              reward: template.baseReward + difficulty * 35,
+              reward: Math.round(
+                template.baseReward * (1 + (difficulty - 1) * 0.12),
+              ),
               lat: station.lat + (Math.random() - 0.5) * 0.04,
               lng: station.lng + (Math.random() - 0.5) * 0.04,
               status: "OPEN",
@@ -1346,6 +1409,7 @@ export default function Page() {
         return {
           ...current,
           credits: nextCredits,
+          payrollTicker: nextPayrollTicker >= PAYROLL_INTERVAL ? 0 : nextPayrollTicker,
           resolvedCount: nextResolvedCount,
           nextIncidentId,
           vehicles: nextVehicles,
@@ -1410,6 +1474,14 @@ export default function Page() {
             {game.credits}
           </Badge>
           <Badge tone="blue">
+            <Users className="mr-1 h-3 w-3" />
+            {game.employees} staff
+          </Badge>
+          <Badge>
+            <Clock3 className="mr-1 h-3 w-3" />
+            payroll {payrollDueIn}s
+          </Badge>
+          <Badge tone="blue">
             <Radio className="mr-1 h-3 w-3" />
             {activeIncidents.length} open
           </Badge>
@@ -1455,6 +1527,16 @@ export default function Page() {
         )}
 
         <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => hireEmployee(1)}
+            disabled={game.credits < HIRING_COST}
+            title={`Hire 1 employee for ${HIRING_COST}`}
+          >
+            <UserPlus className="mr-1 h-3.5 w-3.5" />
+            Hire
+          </Button>
           <Button
             size="sm"
             className="flex-1"
@@ -1559,14 +1641,19 @@ export default function Page() {
             <p className="text-[11px] text-slate-300">
               Employees: {stationEmployees[selectedStation.id] ?? 0}
             </p>
+            <p className="text-[11px] text-slate-300">
+              Unassigned staff: {unassignedEmployees}
+            </p>
             <Button
               size="sm"
               variant="outline"
               className="mt-2"
-              disabled={game.credits < 260 + selectedStation.level * 200}
+              disabled={
+                game.credits < UPGRADE_BASE_COST + selectedStation.level * 25000
+              }
               onClick={() => upgradeStation(selectedStation.id)}
             >
-              Upgrade ({260 + selectedStation.level * 200})
+              Upgrade ({UPGRADE_BASE_COST + selectedStation.level * 25000})
             </Button>
             <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-300">
               Buy vehicles
@@ -1579,6 +1666,13 @@ export default function Page() {
                     !DISABLED_VEHICLE_TYPES.includes(type),
                 )
                 .map((type) => {
+                  const config = VEHICLE_TYPES[type];
+                  const usedCapacity = game.vehicles.filter(
+                    (vehicle) => vehicle.stationId === selectedStation.id,
+                  ).length;
+                  const hasCapacity =
+                    usedCapacity < stationCapacity(selectedStation.level);
+                  const hasStaff = unassignedEmployees >= config.crew;
                   const Icon =
                     type === "ENGINE" || type === "LADDER"
                       ? Truck
@@ -1592,11 +1686,13 @@ export default function Page() {
                       key={`${selectedStation.id}-${type}`}
                       size="sm"
                       variant="outline"
-                      disabled={game.credits < VEHICLE_TYPES[type].cost}
+                      disabled={
+                        game.credits < config.cost || !hasCapacity || !hasStaff
+                      }
                       onClick={() => buyVehicle(selectedStation.id, type)}
                     >
                       <Icon className="mr-1 h-3.5 w-3.5" />
-                      {VEHICLE_TYPES[type].label}
+                      {config.label}
                     </Button>
                   );
                 })}
