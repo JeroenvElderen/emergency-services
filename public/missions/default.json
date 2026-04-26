@@ -30,5 +30,21 @@
       "fire",
       "urban"
     ]
+  },
+  {
+    "id": "3",
+    "name": "Person stuck in car",
+    "average_credits": 520,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ]
   }
 ]

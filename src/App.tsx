@@ -689,13 +689,7 @@ const VEHICLE_ROUTE_COLORS = [
 ];
 
 function getVehicleRouteColor(vehicleId: number) {
-  return VEHICLE_ROUTE_COLORS[vehicleId % VEHICLE_ROUTE_COLORS.length];
-}
-
-const VEHICLE_ROUTE_OFFSETS = [0, 2, -2, 4, -4, 6, -6, 8];
-
-function getVehicleRouteOffset(vehicleId: number) {
-  return VEHICLE_ROUTE_OFFSETS[vehicleId % VEHICLE_ROUTE_OFFSETS.length];
+  return VEHICLE_ROUTE_COLORS[(vehicleId - 1) % VEHICLE_ROUTE_COLORS.length];
 }
 
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
@@ -1455,11 +1449,31 @@ export default function Page() {
   useEffect(() => {
     if (!mapRef.current) return;
 
+    const activeRouteIds = new Set(
+      game.vehicles
+        .filter((vehicle) => {
+          if (
+            vehicle.status !== "DISPATCHED" &&
+            vehicle.status !== "RETURNING"
+          ) {
+            return false;
+          }
+
+          if (vehicle.incidentId === null) return false;
+
+          return game.incidents.some((incident) => incident.id === vehicle.incidentId);
+        })
+        .map((vehicle) => `vehicle-route-${vehicle.id}`),
+    );
+
     routeLayerIdsRef.current.forEach((id) => {
+      if (activeRouteIds.has(id)) return;
       if (mapRef.current?.getLayer(id)) mapRef.current.removeLayer(id);
       if (mapRef.current?.getSource(id)) mapRef.current.removeSource(id);
     });
-    routeLayerIdsRef.current = [];
+    routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) =>
+      activeRouteIds.has(id),
+    );
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
     incidentMarkerRefs.current.forEach((marker) => marker.remove());
@@ -1543,6 +1557,7 @@ export default function Page() {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         vehicleProgressFloorRef.current.delete(vehicle.id);
+        return;
       }
 
       const station = game.stations.find((s) => s.id === vehicle.stationId);
@@ -1552,37 +1567,39 @@ export default function Page() {
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
-     const routeToRender =
+      const routeToRender =
         remainingRoute.length >= 3 || vehicle.route.length < 2
           ? remainingRoute
           : vehicle.route;
 
       if (shouldRenderVehicle && routeToRender.length >= 2) {
         const routeId = `vehicle-route-${vehicle.id}`;
-        const addRouteLayer = () => {
+        const updateOrCreateRouteLayer = () => {
           if (!mapRef.current) return;
 
-          if (mapRef.current.getLayer(routeId)) {
-            mapRef.current.removeLayer(routeId);
-          }
+          const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
+            type: "Feature",
+            geometry: {
+              type: "LineString",
+              coordinates: routeToRender,
+            },
+            properties: {},
+          };
 
-          if (mapRef.current.getSource(routeId)) {
-            mapRef.current.removeSource(routeId);
+          const existingSource = mapRef.current.getSource(routeId);
+          if (existingSource) {
+            (existingSource as mapboxgl.GeoJSONSource).setData(routeData);
+            return;
           }
-
-          routeLayerIdsRef.current.push(routeId);
 
           mapRef.current.addSource(routeId, {
             type: "geojson",
-            data: {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: routeToRender,
-              },
-              properties: {},
-            },
+            data: routeData,
           });
+
+          if (!routeLayerIdsRef.current.includes(routeId)) {
+            routeLayerIdsRef.current.push(routeId);
+          }
 
           mapRef.current.addLayer({
             id: routeId,
@@ -1601,13 +1618,11 @@ export default function Page() {
         };
 
         if (mapRef.current?.isStyleLoaded()) {
-          addRouteLayer();
+          updateOrCreateRouteLayer();
         } else {
-          mapRef.current?.once("load", addRouteLayer);
+          mapRef.current?.once("load", updateOrCreateRouteLayer);
         }
       }
-
-      if (!shouldRenderVehicle) return;
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {

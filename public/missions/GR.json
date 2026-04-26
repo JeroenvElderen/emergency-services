@@ -1,22 +1,22 @@
 [
   {
-    "id": "",
-    "name": "",
-    "average_credits": 0,
+    "id": "1",
+    "name": "Fire at Acropolis of Athens",
+    "average_credits": 1000,
     "requirements": {
-      "firetrucks": 0
+      "firetrucks": 2
     },
     "prerequisites": {
       "main_building": 0,
-      "fire_stations": 100
+      "fire_stations": 1
     },
     "mission_categories": [
       "fire",
       "urban"
     ],
     "fixed_location": {
-      "lat": 39.1,
-      "lng": 22.8
+      "lat": 37.97165171169059, 
+      "lng": 23.725760773267712
     }
   }
 ]
