@@ -738,6 +738,17 @@ export default function Page() {
   const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  const vehicleProgressFloorRef = useRef<
+    Map<
+      number,
+      {
+        status: VehicleStatus;
+        incidentId: number | null;
+        totalEta: number;
+        progress: number;
+      }
+    >
+  >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
   const routeLayerIdsRef = useRef<string[]>([]);
@@ -860,7 +871,14 @@ export default function Page() {
   const getSmoothedProgress = useCallback((vehicle: Vehicle) => {
     const isMoving =
       vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING";
-    const elapsedSinceTick = Math.max(
+    if (!isMoving) {
+      vehicleProgressFloorRef.current.delete(vehicle.id);
+      return vehicle.totalEta <= 0
+        ? 1
+        : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
+    }
+
+      const elapsedSinceTick = Math.max(
       0,
       (Date.now() - lastVehicleTickAtRef.current) / 1000,
     );
@@ -869,7 +887,24 @@ export default function Page() {
         ? Math.max(vehicle.eta - Math.min(elapsedSinceTick, 0.98), 0)
         : Math.max(vehicle.eta, 0);
 
-    return vehicle.totalEta <= 0 ? 1 : 1 - smoothEta / vehicle.totalEta;
+    const rawProgress =
+      vehicle.totalEta <= 0 ? 1 : 1 - smoothEta / vehicle.totalEta;
+    const previous = vehicleProgressFloorRef.current.get(vehicle.id);
+    const sameLeg =
+      previous &&
+      previous.status === vehicle.status &&
+      previous.incidentId === vehicle.incidentId &&
+      previous.totalEta === vehicle.totalEta;
+
+    const progress = sameLeg ? Math.max(previous.progress, rawProgress) : rawProgress;
+    vehicleProgressFloorRef.current.set(vehicle.id, {
+      status: vehicle.status,
+      incidentId: vehicle.incidentId,
+      totalEta: vehicle.totalEta,
+      progress,
+    });
+
+    return progress;
   }, []);
   const hasStarted = game.stations.length > 0;
   const activeVehicleCount = game.vehicles.filter(
@@ -1446,6 +1481,7 @@ export default function Page() {
       if (!shouldRenderVehicle) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
+        vehicleProgressFloorRef.current.delete(vehicle.id);
       }
 
       const station = game.stations.find((s) => s.id === vehicle.stationId);
