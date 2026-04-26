@@ -1,0 +1,56 @@
+[
+  {
+    "id": "ENGINE",
+    "label": "Engine",
+    "station_type": "FIRE",
+    "cost": 75000,
+    "speed_kmh": 55,
+    "crew": 4,
+    "enabled": true
+  },
+  {
+    "id": "LADDER",
+    "label": "Ladder",
+    "station_type": "FIRE",
+    "cost": 120000,
+    "speed_kmh": 48,
+    "crew": 5,
+    "enabled": false
+  },
+  {
+    "id": "AMBULANCE",
+    "label": "Ambulance",
+    "station_type": "EMS",
+    "cost": 190000,
+    "speed_kmh": 65,
+    "crew": 2,
+    "enabled": true
+  },
+  {
+    "id": "RESCUE",
+    "label": "Rescue",
+    "station_type": "EMS",
+    "cost": 140000,
+    "speed_kmh": 62,
+    "crew": 3,
+    "enabled": true
+  },
+  {
+    "id": "PATROL",
+    "label": "Patrol",
+    "station_type": "POLICE",
+    "cost": 45000,
+    "speed_kmh": 70,
+    "crew": 1,
+    "enabled": true
+  },
+  {
+    "id": "SWAT",
+    "label": "SWAT",
+    "station_type": "POLICE",
+    "cost": 90000,
+    "speed_kmh": 58,
+    "crew": 4,
+    "enabled": true
+  }
+]
