@@ -916,7 +916,17 @@ export default function Page() {
       }
 
       const nextCatalog =
-        countryMissions.length > 0 ? countryMissions : defaultMissions;
+        countryMissions.length > 0
+          ? [
+              ...defaultMissions,
+              ...countryMissions.filter(
+                (countryMission) =>
+                  !defaultMissions.some(
+                    (defaultMission) => defaultMission.id === countryMission.id,
+                  ),
+              ),
+            ]
+          : defaultMissions;
 
       if (mounted) setMissionCatalog(nextCatalog);
     };
@@ -1470,6 +1480,13 @@ export default function Page() {
   useEffect(() => {
     if (!mapRef.current) return;
 
+    const removeVehicleRoute = (vehicleId: number) => {
+      const routeId = `vehicle-route-${vehicleId}`;
+      if (mapRef.current?.getLayer(routeId)) mapRef.current.removeLayer(routeId);
+      if (mapRef.current?.getSource(routeId)) mapRef.current.removeSource(routeId);
+      routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) => id !== routeId);
+    };
+
     const activeRouteIds = new Set(
       game.vehicles
         .filter((vehicle) => {
@@ -1555,20 +1572,6 @@ export default function Page() {
       );
     });
 
-    const movingVehicleIds = game.vehicles
-      .filter(
-        (vehicle) =>
-          (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
-          vehicle.incidentId !== null,
-      )
-      .map((vehicle) => vehicle.id)
-      .sort((a, b) => a - b);
-    const routeOffsetByVehicleId = new Map<number, number>();
-    const offsetCenter = (movingVehicleIds.length - 1) / 2;
-    movingVehicleIds.forEach((vehicleId, index) => {
-      routeOffsetByVehicleId.set(vehicleId, (index - offsetCenter) * 1.8);
-    });
-
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
         (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
@@ -1578,12 +1581,19 @@ export default function Page() {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         vehicleProgressFloorRef.current.delete(vehicle.id);
+        removeVehicleRoute(vehicle.id);
         return;
       }
 
       const station = game.stations.find((s) => s.id === vehicle.stationId);
       const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
-      if (!station || !incident) return;
+      if (!station || !incident) {
+        vehicleMarkerRefs.current.get(vehicle.id)?.remove();
+        vehicleMarkerRefs.current.delete(vehicle.id);
+        vehicleProgressFloorRef.current.delete(vehicle.id);
+        removeVehicleRoute(vehicle.id);
+        return;
+      }
       const progress = getSmoothedProgress(vehicle);
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
@@ -1626,7 +1636,6 @@ export default function Page() {
             paint: {
               "line-color": getVehicleRouteColor(vehicle.id),
               "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
-              "line-offset": routeOffsetByVehicleId.get(vehicle.id) ?? 0,
               "line-opacity": 0.8,
               ...(vehicle.status === "RETURNING"
                 ? { "line-dasharray": [1.4, 1.2] }
@@ -1641,9 +1650,7 @@ export default function Page() {
           mapRef.current?.once("load", updateOrCreateRouteLayer);
         }
       } else {
-        if (mapRef.current?.getLayer(routeId)) mapRef.current.removeLayer(routeId);
-        if (mapRef.current?.getSource(routeId)) mapRef.current.removeSource(routeId);
-        routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) => id !== routeId);
+        removeVehicleRoute(vehicle.id);
       }
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
