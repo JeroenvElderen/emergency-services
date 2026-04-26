@@ -74,6 +74,9 @@ type IncidentStage = {
 
 type Incident = {
   id: number;
+  missionId?: string;
+  missionKey?: string;
+  isSpecialMission?: boolean;
   title: string;
   category: IncidentCategory;
   severity: number;
@@ -93,6 +96,9 @@ type Incident = {
 type MissionDefinition = {
   id: string;
   name: string;
+  special?: boolean;
+  spawn_limit_per_day?: number;
+  unique_active?: boolean;
   average_credits: number;
   requirements: Partial<Record<string, number>>;
   prerequisites?: Partial<Record<string, number>>;
@@ -159,6 +165,7 @@ type GameState = {
   reputation: number;
   weather: "CLEAR" | "RAIN" | "SNOW" | "HEAT";
   weatherTimer: number;
+  missionDailySpawns: Record<string, string>;
 };
 
 type IncomeToast = {
@@ -315,6 +322,7 @@ const initialState: GameState = {
   reputation: 50,
   weather: "CLEAR",
   weatherTimer: WEATHER_INTERVAL_SECONDS,
+  missionDailySpawns: {},
 };
 
 const rand = (min: number, max: number) =>
@@ -423,6 +431,14 @@ function missionToTemplate(
   };
 }
 
+function getCurrentDayKey() {
+  return new Date().toLocaleDateString("en-CA");
+}
+
+function isSpecialMissionDefinition(mission: MissionDefinition) {
+  return mission.special ?? Boolean(mission.fixed_location);
+}
+
 function normalizeRequirementKey(value: string) {
   return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
@@ -508,6 +524,7 @@ function loadGame(): GameState {
       reputation: Math.max(0, Math.min(100, parsed.reputation ?? 50)),
       weather: parsed.weather ?? "CLEAR",
       weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
+      missionDailySpawns: parsed.missionDailySpawns ?? {},
       homeCountryCode,
       activeCountryCode,
       unlockedCountryCodes: unlockedCountryCodes.includes(homeCountryCode)
@@ -523,6 +540,9 @@ function loadGame(): GameState {
       })),
       incidents: parsed.incidents.map((incident) => ({
         ...incident,
+        missionId: incident.missionId,
+        missionKey: incident.missionKey,
+        isSpecialMission: incident.isSpecialMission ?? false,
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
         stageWorkTotal: incident.stageWorkTotal ?? STAGE_WORK_SECONDS,
         filingRemaining: incident.filingRemaining ?? FILING_SECONDS,
@@ -1568,13 +1588,10 @@ export default function Page() {
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
-      const routeToRender =
-        remainingRoute.length >= 3 || vehicle.route.length < 2
-          ? remainingRoute
-          : vehicle.route;
+      const routeToRender = remainingRoute.length >= 2 ? remainingRoute : [];
+      const routeId = `vehicle-route-${vehicle.id}`;
 
       if (shouldRenderVehicle && routeToRender.length >= 2) {
-        const routeId = `vehicle-route-${vehicle.id}`;
         const updateOrCreateRouteLayer = () => {
           if (!mapRef.current) return;
 
@@ -1623,6 +1640,10 @@ export default function Page() {
         } else {
           mapRef.current?.once("load", updateOrCreateRouteLayer);
         }
+      } else {
+        if (mapRef.current?.getLayer(routeId)) mapRef.current.removeLayer(routeId);
+        if (mapRef.current?.getSource(routeId)) mapRef.current.removeSource(routeId);
+        routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) => id !== routeId);
       }
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
@@ -1733,6 +1754,7 @@ export default function Page() {
   const chooseIncidentTemplates = useCallback(
     (state: GameState) => {
       if (missionCatalog.length === 0) return [] as SpawnableMission[];
+      const todayKey = getCurrentDayKey();
 
       const availableVehicleCounts = state.vehicles.reduce(
         (counts, vehicle) => ({
@@ -1741,9 +1763,22 @@ export default function Page() {
         }),
         {} as Partial<Record<VehicleType, number>>,
       );
+      const activeSpecialMissionKeys = new Set(
+        state.incidents
+          .filter((incident) => incident.status !== "COMPLETE" && incident.isSpecialMission)
+          .map((incident) => incident.missionKey)
+          .filter((missionKey): missionKey is string => Boolean(missionKey)),
+      );
 
       return missionCatalog
         .filter((mission) => meetsMissionPrerequisites(mission.prerequisites, state))
+        .filter((mission) => {
+          if (!isSpecialMissionDefinition(mission)) return true;
+          const missionKey = `${state.activeCountryCode}:${mission.id}`;
+          const alreadySpawnedToday = state.missionDailySpawns[missionKey] === todayKey;
+          const hasActiveDuplicate = activeSpecialMissionKeys.has(missionKey);
+          return !alreadySpawnedToday && !hasActiveDuplicate;
+        })
         .map((mission) => missionToTemplate(mission, state))
         .filter((template): template is SpawnableMission => Boolean(template))
         .filter((template) => {
@@ -2171,6 +2206,7 @@ export default function Page() {
         let nextIncidentId = current.nextIncidentId;
         let nextResolvedCount = current.resolvedCount;
         const nextCredits = current.credits + creditsEarned;
+        const nextMissionDailySpawns = { ...current.missionDailySpawns };
 
         if (creditsEarned > 0) {
           nextResolvedCount +=
@@ -2189,6 +2225,11 @@ export default function Page() {
             const station =
               current.stations[rand(0, current.stations.length - 1)];
             const template = available[rand(0, available.length - 1)];
+            const missionKey = `${current.activeCountryCode}:${template.id}`;
+            const missionDef = missionCatalog.find((mission) => mission.id === template.id);
+            const isSpecialMission = missionDef
+              ? isSpecialMissionDefinition(missionDef)
+              : Boolean(template.fixedLocation);
             const difficulty =
               1 +
               Math.floor(
@@ -2198,6 +2239,9 @@ export default function Page() {
               template.fixedLocation ?? pickIncidentLocation(station);
             const incident: Incident = {
               id: nextIncidentId,
+              missionId: template.id,
+              missionKey,
+              isSpecialMission,
               title: template.title,
               category: template.category,
               severity: difficulty,
@@ -2221,6 +2265,9 @@ export default function Page() {
               filingTotal: FILING_SECONDS,
             };
             nextIncidentId += 1;
+            if (isSpecialMission) {
+              nextMissionDailySpawns[missionKey] = getCurrentDayKey();
+            }
             finalIncidents = [...finalIncidents, incident];
             progressNotes.unshift(`New incident: ${incident.title}.`);
             spawnedNotifications.push({
@@ -2259,6 +2306,7 @@ export default function Page() {
           reputation: nextReputation,
           weather: nextWeather,
           weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
+          missionDailySpawns: nextMissionDailySpawns,
           nextIncidentId,
           vehicles: nextVehicles,
           incidents: finalIncidents,
@@ -2280,7 +2328,7 @@ export default function Page() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [chooseIncidentTemplates, pickIncidentLocation]);
+  }, [chooseIncidentTemplates, missionCatalog, pickIncidentLocation]);
 
   const stationEmployees = useMemo(() => {
     if (game.stations.length === 0) return {} as Record<number, number>;
