@@ -5,7 +5,7 @@
     "station_type": "FIRE",
     "cost": 75000,
     "speed_kmh": 55,
-    "crew": 4,
+    "crew": 5,
     "enabled": true
   },
   {

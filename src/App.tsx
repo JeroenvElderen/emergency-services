@@ -12,7 +12,6 @@ import {
   Flame,
   Globe2,
   House,
-  MapPinned,
   Radio,
   Shield,
   Siren,
@@ -23,18 +22,16 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { LiveIncidentsPanel } from "@/components/live-incidents-panel";
+import type { IncidentLike } from "@/components/live-incidents-panel";
+import type {
+  IncidentCategory,
+  IncidentStatus,
+  VehicleStatus,
+  VehicleType,
+} from "@/types/game";
 
 type StationType = "FIRE" | "EMS" | "POLICE";
-type VehicleType =
-  | "ENGINE"
-  | "LADDER"
-  | "AMBULANCE"
-  | "RESCUE"
-  | "PATROL"
-  | "SWAT";
-type IncidentCategory = "FIRE" | "EMS" | "POLICE";
-type VehicleStatus = "AVAILABLE" | "DISPATCHED" | "RETURNING";
-type IncidentStatus = "OPEN" | "RESPONDING" | "COMPLETE";
 
 type Station = {
   id: number;
@@ -119,6 +116,13 @@ type SpawnableMission = {
   category: IncidentCategory;
   baseReward: number;
   stages: IncidentStage[];
+};
+
+type IncidentNotification = {
+  id: number;
+  title: string;
+  category: IncidentCategory;
+  reward: number;
 };
 
 type GameState = {
@@ -260,7 +264,7 @@ const VEHICLE_TYPES = {
 const DEFAULT_DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const initialState: GameState = {
-  credits: 250000,
+  credits: 10000,
   employees: 10,
   homeCountryCode: "DE",
   activeCountryCode: "DE",
@@ -671,6 +675,9 @@ export default function Page() {
     null,
   );
   const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
+  const [incidentNotifications, setIncidentNotifications] = useState<
+    IncidentNotification[]
+  >([]);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -1413,56 +1420,6 @@ export default function Page() {
     [missionCatalog],
   );
 
-  function spawnIncident() {
-    setGame((current) => {
-      const activeCount = current.incidents.filter(
-        (incident) => incident.status !== "COMPLETE",
-      ).length;
-      const available = chooseIncidentTemplates(current);
-      if (
-        available.length === 0 ||
-        current.stations.length === 0 ||
-        activeCount >= Math.max(1, current.vehicles.length)
-      )
-        return current;
-
-      const station = current.stations[rand(0, current.stations.length - 1)];
-      const template = available[rand(0, available.length - 1)];
-      const difficulty =
-        1 + Math.floor((current.resolvedCount + current.stations.length) / 4);
-
-      const { lat, lng } = pickIncidentLocation(station);
-
-      const incident: Incident = {
-        id: current.nextIncidentId,
-        title: template.title,
-        category: template.category,
-        severity: difficulty,
-        reward: Math.max(650, Math.round(template.baseReward * (1.35 + (difficulty - 1) * 0.14))),
-        lat,
-        lng,
-        status: "OPEN",
-        currentStage: 0,
-        stages: template.stages,
-        assignedVehicleIds: [],
-        stageWorkRemaining: STAGE_WORK_SECONDS,
-        stageWorkTotal: STAGE_WORK_SECONDS,
-        filingRemaining: FILING_SECONDS,
-        filingTotal: FILING_SECONDS,
-      };
-
-      return {
-        ...current,
-        nextIncidentId: current.nextIncidentId + 1,
-        incidents: [...current.incidents, incident],
-        log: [
-          `New ${incident.category} incident: ${incident.title}.`,
-          ...current.log,
-        ].slice(0, 10),
-      };
-    });
-  }
-
   async function dispatch(vehicleId: number, incidentId: number) {
     const vehicle = game.vehicles.find((v) => v.id === vehicleId);
     const incident = game.incidents.find((i) => i.id === incidentId);
@@ -1638,6 +1595,7 @@ export default function Page() {
 
   useEffect(() => {
     const timer = setInterval(() => {
+      const spawnedNotifications: IncidentNotification[] = [];
       setGame((current) => {
         let creditsEarned = 0;
         const progressNotes: string[] = [];
@@ -1806,7 +1764,8 @@ export default function Page() {
 
         const shouldSpawn =
           current.stations.length > 0 &&
-          (activeCount < 1 || (Math.random() < 0.08 && activeCount < maxActiveIncidents));
+          activeCount < maxActiveIncidents &&
+          Math.random() < (activeCount < 1 ? 0.2 : 0.08);
 
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
@@ -1861,6 +1820,12 @@ export default function Page() {
             nextIncidentId += 1;
             finalIncidents = [...finalIncidents, incident];
             progressNotes.unshift(`New incident: ${incident.title}.`);
+            spawnedNotifications.push({
+              id: incident.id,
+              title: incident.title,
+              category: incident.category,
+              reward: incident.reward,
+            });
           }
         }
 
@@ -1874,6 +1839,11 @@ export default function Page() {
           log: [...progressNotes, ...current.log].slice(0, 10),
         };
       });
+      if (spawnedNotifications.length > 0) {
+        setIncidentNotifications((current) =>
+          [...spawnedNotifications, ...current].slice(0, 3),
+        );
+      }
     }, 1000);
 
     return () => clearInterval(timer);
@@ -2114,14 +2084,6 @@ export default function Page() {
             <UserPlus className="mr-1 h-3.5 w-3.5" />
             Hire
           </Button>
-          <Button
-            size="sm"
-            className="flex-1"
-            onClick={spawnIncident}
-            disabled={!hasStarted || activeIncidents.length >= 2}
-          >
-            New Incident
-          </Button>
           <Button size="sm" variant="outline" onClick={resetGame}>
             Reset
           </Button>
@@ -2236,127 +2198,74 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute bottom-3 right-3 z-30 max-h-[52vh] w-[360px] space-y-2 overflow-y-auto rounded-2xl border border-slate-700/70 bg-slate-950/80 p-3 shadow-2xl backdrop-blur-sm">
-        <h2 className="text-sm font-bold">Live Incidents</h2>
-        {activeIncidents.length === 0 ? (
-          <p className="text-xs text-slate-400">No active incidents.</p>
-        ) : (
-          activeIncidents.map((incident) => {
-            const stage = incident.stages[incident.currentStage];
-            const progress = missionProgress(incident);
-            const requiredTypes = [...new Set(stage?.required ?? [])];
-            return (
-              <div
-                key={incident.id}
-                className={`rounded-xl border p-2 transition ${
-                  focusedIncidentId === incident.id
-                    ? "border-sky-500 bg-sky-950/40"
-                    : "border-slate-700 bg-slate-900/90"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-semibold">{incident.title}</p>
-                    <p className="text-[11px] text-slate-400">
-                      {stage?.label} • reward {incident.reward}
-                    </p>
-                  </div>
-                  <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>
-                    {incident.status}
-                  </Badge>
-                </div>
-                <div className="mt-2 flex gap-1.5">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      mapRef.current?.flyTo({
-                        center: [incident.lng, incident.lat],
-                        zoom: Math.max(mapRef.current.getZoom(), 12),
-                        essential: true,
-                      });
-                      setFocusedIncidentId(incident.id);
-                    }}
-                  >
-                    <MapPinned className="mr-1 h-3.5 w-3.5" />
-                    Focus map
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => dispatchRequiredVehicles(incident)}
-                    disabled={game.credits < DISPATCH_COST}
-                  >
-                    Dispatch suggested
-                  </Button>
-                </div>
-                <div className="mt-2">
-                  <div className="mb-1 flex items-center justify-between text-[10px] text-slate-400">
-                    <span>Mission progress</span>
-                    <span>{Math.round(progress.overall * 100)}%</span>
-                  </div>
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700">
-                    <div
-                      className={`h-full transition-all ${progress.colorClass}`}
-                      style={{
-                        width: `${Math.round(progress.overall * 100)}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-slate-300">
-                  <span>1) ETA: {Math.round(progress.eta * 100)}%</span>
-                  <span>
-                    2) On scene: {Math.round(progress.mission * 100)}%
-                  </span>
-                  <span>
-                    3) ETA back: {Math.round(progress.returnTrip * 100)}%
-                  </span>
-                  <span>4) Filing: {Math.round(progress.filing * 100)}%</span>
-                </div>
-                <div className="mt-2 space-y-1.5">
-                  {requiredTypes.map((type) => {
-                    const assignedCountForType = incident.assignedVehicleIds.filter(
-                      (id) => game.vehicles.find((v) => v.id === id)?.type === type,
-                    ).length;
-                    const availableMatches = game.vehicles.filter(
-                      (v) => v.status === "AVAILABLE" && v.type === type,
-                    );
-                    return (
-                      <div key={`${incident.id}-${type}`} className="rounded-lg border border-slate-700/80 p-1.5">
-                        <p className="mb-1 text-[11px] font-medium text-slate-300">
-                          {type}
-                        </p>
-                        <div className="flex flex-wrap gap-1">
-                          {assignedCountForType > 0 ? (
-                            <Badge tone="good">
-                              {assignedCountForType} {type} assigned
-                            </Badge>
-                          ) : null}
-                          {availableMatches.length === 0 ? (
-                            <Badge tone="bad">No available {type}</Badge>
-                          ) : (
-                            availableMatches.map((vehicle) => (
-                              <Button
-                                key={vehicle.id}
-                                size="sm"
-                                variant="outline"
-                                disabled={game.credits < DISPATCH_COST}
-                                onClick={() => dispatch(vehicle.id, incident.id)}
-                              >
-                                {vehicle.name}
-                              </Button>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+      {incidentNotifications.length > 0 && (
+        <div className="absolute bottom-3 left-3 z-30 w-[320px] space-y-2">
+          {incidentNotifications.map((notice) => (
+            <div
+              key={`${notice.id}-${notice.title}`}
+              className="rounded-xl border border-rose-500/60 bg-slate-950/95 p-3 shadow-xl backdrop-blur-sm"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+                  Incoming incident
+                </p>
+                <button
+                  type="button"
+                  className="text-slate-400 transition hover:text-slate-100"
+                  onClick={() =>
+                    setIncidentNotifications((current) =>
+                      current.filter((item) => item.id !== notice.id),
+                    )
+                  }
+                  aria-label="Dismiss incident notification"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-            );
-          })
-        )}
 
+              <p className="mt-1 text-sm font-semibold text-slate-100">{notice.title}</p>
+              <p className="mt-1 text-xs text-slate-300">
+                Type: {notice.category} • Reward: {notice.reward}
+              </p>
+              <Button
+                size="sm"
+                className="mt-2 w-full"
+                onClick={() => {
+                  setFocusedIncidentId(notice.id);
+                  setIncidentNotifications((current) =>
+                    current.filter((item) => item.id !== notice.id),
+                  );
+                }}
+              >
+                Focus on map
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <LiveIncidentsPanel
+        activeIncidents={activeIncidents}
+        focusedIncidentId={focusedIncidentId}
+        missionProgress={(incident) => missionProgress(incident as Incident)}
+        vehicles={game.vehicles}
+        credits={game.credits}
+        dispatchCost={DISPATCH_COST}
+        onFocusIncident={(incident: IncidentLike) => {
+          mapRef.current?.flyTo({
+            center: [incident.lng, incident.lat],
+            zoom: Math.max(mapRef.current.getZoom(), 12),
+            essential: true,
+          });
+          setFocusedIncidentId(incident.id);
+        }}
+        onDispatchSuggested={(incident) =>
+          dispatchRequiredVehicles(incident as Incident)
+        }
+        onDispatchVehicle={dispatch}
+      />
+      
+      <div className="absolute bottom-[55vh] right-3 z-30 w-[360px] space-y-1">
         <div className="space-y-1">
           {game.log.slice(0, 4).map((entry, index) => (
             <p

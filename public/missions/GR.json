@@ -14,5 +14,37 @@
       "fire",
       "urban"
     ]
+  },
+  {
+    "id": "101",
+    "name": "Smoke from chimney",
+    "average_credits": 480,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ]
+  },
+  {
+    "id": "",
+    "name": "",
+    "average_credits": 0,
+    "requirements": {
+      "firetrucks": 0
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 2
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ]
   }
 ]
