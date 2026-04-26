@@ -13,6 +13,10 @@
     "mission_categories": [
       "fire",
       "urban"
-    ]
+    ],
+    "fixed_location": {
+      "lat": 40.3,
+      "lng": -3.7
+    }
   }
 ]

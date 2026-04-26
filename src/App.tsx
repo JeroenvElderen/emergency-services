@@ -98,6 +98,10 @@ type MissionDefinition = {
   prerequisites?: Partial<Record<string, number>>;
   stages?: MissionStageDefinition[];
   mission_categories: string[];
+  fixed_location?: {
+    lat: number;
+    lng: number;
+  };
 };
 
 type MissionStageDefinition = {
@@ -117,10 +121,15 @@ type VehicleCatalogEntry = {
 };
 
 type SpawnableMission = {
+  id: string;
   title: string;
   category: IncidentCategory;
   baseReward: number;
   stages: IncidentStage[];
+  fixedLocation?: {
+    lat: number;
+    lng: number;
+  };
 };
 
 type IncidentNotification = {
@@ -402,10 +411,12 @@ function missionToTemplate(
   });
 
   return {
+    id: mission.id,
     title: mission.name,
     category,
     baseReward: mission.average_credits,
     stages,
+    fixedLocation: mission.fixed_location,
   };
 }
 
@@ -839,24 +850,36 @@ export default function Page() {
     let mounted = true;
 
     const loadMissionsForCountry = async () => {
-      const missionPaths = [
-        `/missions/${game.activeCountryCode}.json`,
-        "/missions/default.json",
-      ];
-
-      for (const path of missionPaths) {
-        try {
-          const response = await fetch(path);
-          if (!response.ok) continue;
-          const missions = (await response.json()) as MissionDefinition[];
-          if (mounted) setMissionCatalog(missions);
-          return;
-        } catch {
-          continue;
+      let defaultMissions: MissionDefinition[] = [];
+      try {
+        const defaultResponse = await fetch("/missions/default.json");
+        if (defaultResponse.ok) {
+          defaultMissions = (await defaultResponse.json()) as MissionDefinition[];
         }
+      } catch {
+        defaultMissions = [];
       }
 
-      if (mounted) setMissionCatalog([]);
+      let countryMissions: MissionDefinition[] = [];
+      try {
+        const countryResponse = await fetch(
+          `/missions/${game.activeCountryCode}.json`,
+        );
+        if (countryResponse.ok) {
+          countryMissions = (await countryResponse.json()) as MissionDefinition[];
+        }
+      } catch {
+        countryMissions = [];
+      }
+
+      const merged = new Map<string, MissionDefinition>();
+      defaultMissions.forEach((mission) => merged.set(mission.id, mission));
+      countryMissions.forEach((mission) => {
+        const base = merged.get(mission.id);
+        merged.set(mission.id, base ? { ...base, ...mission } : mission);
+      });
+
+      if (mounted) setMissionCatalog(Array.from(merged.values()));
     };
 
     void loadMissionsForCountry();
@@ -2111,7 +2134,8 @@ export default function Page() {
               Math.floor(
                 (nextResolvedCount + current.stations.length) / 4,
               );
-            const { lat, lng } = pickIncidentLocation(station);
+            const { lat, lng } =
+              template.fixedLocation ?? pickIncidentLocation(station);
             const incident: Incident = {
               id: nextIncidentId,
               title: template.title,
