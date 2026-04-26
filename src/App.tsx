@@ -1316,7 +1316,8 @@ export default function Page() {
         !vehicle ||
         !incident ||
         vehicle.status !== "AVAILABLE" ||
-        current.credits < DISPATCH_COST
+        current.credits < DISPATCH_COST ||
+        incident.assignedVehicleIds.includes(vehicleId)
       ) {
         return current;
       }
@@ -2128,10 +2129,9 @@ export default function Page() {
                 </div>
                 <div className="mt-2 space-y-1.5">
                   {requiredTypes.map((type) => {
-                    const alreadyAssigned = incident.assignedVehicleIds.some(
-                      (id) =>
-                        game.vehicles.find((v) => v.id === id)?.type === type,
-                    );
+                    const assignedCountForType = incident.assignedVehicleIds.filter(
+                      (id) => game.vehicles.find((v) => v.id === id)?.type === type,
+                    ).length;
                     const availableMatches = game.vehicles.filter(
                       (v) => v.status === "AVAILABLE" && v.type === type,
                     );
@@ -2141,9 +2141,12 @@ export default function Page() {
                           {type}
                         </p>
                         <div className="flex flex-wrap gap-1">
-                          {alreadyAssigned ? (
-                            <Badge tone="good">{type} assigned</Badge>
-                          ) : availableMatches.length === 0 ? (
+                          {assignedCountForType > 0 ? (
+                            <Badge tone="good">
+                              {assignedCountForType} {type} assigned
+                            </Badge>
+                          ) : null}
+                          {availableMatches.length === 0 ? (
                             <Badge tone="bad">No available {type}</Badge>
                           ) : (
                             availableMatches.map((vehicle) => (
