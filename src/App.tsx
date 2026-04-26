@@ -94,7 +94,24 @@ type MissionDefinition = {
   average_credits: number;
   requirements: Partial<Record<string, number>>;
   prerequisites?: Partial<Record<string, number>>;
+  stages?: MissionStageDefinition[];
   mission_categories: string[];
+};
+
+type MissionStageDefinition = {
+  label?: string;
+  requirements: Partial<Record<string, number>>;
+  prerequisites?: Partial<Record<string, number>>;
+};
+
+type VehicleCatalogEntry = {
+  id: string;
+  label?: string;
+  station_type?: StationType;
+  cost?: number;
+  speed_kmh?: number;
+  crew?: number;
+  enabled?: boolean;
 };
 
 type SpawnableMission = {
@@ -229,8 +246,18 @@ const VEHICLE_TYPES = {
     crew: 4,
     icon: Shield,
   },
-} as const;
-const DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
+} as Record<
+  VehicleType,
+  {
+    label: string;
+    stationType: StationType;
+    cost: number;
+    speedKmh: number;
+    crew: number;
+    icon: typeof Flame;
+  }
+>;
+const DEFAULT_DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const initialState: GameState = {
   credits: 250000,
@@ -250,6 +277,16 @@ const initialState: GameState = {
 
 const rand = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
+
+function requirementCounts(required: VehicleType[]) {
+  return required.reduce(
+    (counts, type) => ({
+      ...counts,
+      [type]: (counts[type] ?? 0) + 1,
+    }),
+    {} as Partial<Record<VehicleType, number>>,
+  );
+}
 
 function haversineKm(
   a: { lat: number; lng: number },
@@ -276,7 +313,7 @@ function starterVehicleType(stationType: StationType): VehicleType {
   return "PATROL";
 }
 
-const REQUIREMENT_TO_VEHICLE: Record<string, VehicleType> = {
+const LEGACY_REQUIREMENT_TO_VEHICLE: Record<string, VehicleType> = {
   firetrucks: "ENGINE",
   platform_trucks: "LADDER",
   ambulances: "AMBULANCE",
@@ -291,24 +328,100 @@ const MISSION_CATEGORY_TO_INCIDENT: Record<string, IncidentCategory> = {
   police: "POLICE",
 };
 
-function missionToTemplate(mission: MissionDefinition): SpawnableMission | null {
-  const requiredTypes = Object.entries(mission.requirements)
-    .filter(([, count]) => typeof count === "number" && count > 0)
-    .map(([key]) => REQUIREMENT_TO_VEHICLE[key])
-    .filter((vehicleType): vehicleType is VehicleType => Boolean(vehicleType));
-  if (requiredTypes.length === 0) return null;
+function missionToTemplate(
+  mission: MissionDefinition,
+  state: GameState,
+): SpawnableMission | null {
+  const baseRequiredTypes = resolveMissionRequirements(mission.requirements);
+  if (baseRequiredTypes.length === 0) return null;
 
   const category = mission.mission_categories
     .map((value) => MISSION_CATEGORY_TO_INCIDENT[value])
     .find((value): value is IncidentCategory => Boolean(value));
   if (!category) return null;
 
+  const stages: IncidentStage[] = [
+    { label: "Primary Response", required: baseRequiredTypes },
+  ];
+  const dynamicStages = mission.stages ?? [];
+
+  dynamicStages.forEach((stage, index) => {
+    if (!meetsMissionPrerequisites(stage.prerequisites, state)) return;
+    const required = resolveMissionRequirements(stage.requirements);
+    if (required.length === 0) return;
+    stages.push({
+      label: stage.label?.trim() || `Stage ${index + 2}`,
+      required,
+    });
+  });
+
   return {
     title: mission.name,
     category,
     baseReward: mission.average_credits,
-    stages: [{ label: "Primary Response", required: [...new Set(requiredTypes)] }],
+    stages,
   };
+}
+
+function normalizeRequirementKey(value: string) {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function resolveVehicleRequirementKey(key: string): VehicleType | null {
+  const normalizedKey = normalizeRequirementKey(key);
+  if (normalizedKey in LEGACY_REQUIREMENT_TO_VEHICLE) {
+    return LEGACY_REQUIREMENT_TO_VEHICLE[normalizedKey];
+  }
+
+  const directVehicleType = key.toUpperCase() as VehicleType;
+  if (directVehicleType in VEHICLE_TYPES) {
+    return directVehicleType;
+  }
+
+  const vehicleMatch = (Object.entries(VEHICLE_TYPES) as Array<
+    [VehicleType, (typeof VEHICLE_TYPES)[VehicleType]]
+  >).find(([type, config]) => {
+    const normalizedType = normalizeRequirementKey(type);
+    const normalizedTypePlural = `${normalizedType}s`;
+    const normalizedLabel = normalizeRequirementKey(config.label);
+    const normalizedLabelPlural = `${normalizedLabel}s`;
+    return (
+      normalizedKey === normalizedType ||
+      normalizedKey === normalizedTypePlural ||
+      normalizedKey === normalizedLabel ||
+      normalizedKey === normalizedLabelPlural
+    );
+  });
+
+  return vehicleMatch?.[0] ?? null;
+}
+
+function resolveMissionRequirements(
+  requirements: Partial<Record<string, number>>,
+): VehicleType[] {
+  return Object.entries(requirements)
+    .flatMap(([key, count]) => {
+      if (typeof count !== "number" || count <= 0) return [];
+      const vehicleType = resolveVehicleRequirementKey(key);
+      if (!vehicleType) return [];
+      return Array(count).fill(vehicleType);
+    })
+    .filter((vehicleType): vehicleType is VehicleType => Boolean(vehicleType));
+}
+
+function meetsMissionPrerequisites(
+  prerequisites: Partial<Record<string, number>> | undefined,
+  state: GameState,
+) {
+  const prereq = prerequisites ?? {};
+  const fireStations = state.stations.filter((s) => s.type === "FIRE").length;
+  const ambulanceStations = state.stations.filter((s) => s.type === "EMS").length;
+  const policeStations = state.stations.filter((s) => s.type === "POLICE").length;
+
+  if ((prereq.fire_stations ?? 0) > fireStations) return false;
+  if ((prereq.ambulance_stations ?? 0) > ambulanceStations) return false;
+  if ((prereq.police_stations ?? 0) > policeStations) return false;
+  return true;
 }
 
 function findCountry(code: string) {
@@ -540,6 +653,9 @@ function nudgePointToward(
 export default function Page() {
   const [game, setGame] = useState<GameState>(() => loadGame());
   const [missionCatalog, setMissionCatalog] = useState<MissionDefinition[]>([]);
+  const [disabledVehicleTypes, setDisabledVehicleTypes] = useState<VehicleType[]>(
+    DEFAULT_DISABLED_VEHICLE_TYPES,
+  );
   const [requiresCountrySelection, setRequiresCountrySelection] = useState(
     () => loadGame().stations.length === 0,
   );
@@ -596,6 +712,50 @@ export default function Page() {
     const autosave = setInterval(() => saveGame(game), 10000);
     return () => clearInterval(autosave);
   }, [game]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadVehicleCatalog = async () => {
+      try {
+        const response = await fetch("/vehicles.json");
+        if (!response.ok) return;
+
+        const entries = (await response.json()) as VehicleCatalogEntry[];
+        const nextDisabled = new Set<VehicleType>();
+
+        entries.forEach((entry) => {
+          const type = resolveVehicleRequirementKey(entry.id);
+          if (!type) return;
+
+          const current = VEHICLE_TYPES[type];
+          VEHICLE_TYPES[type] = {
+            ...current,
+            label: entry.label ?? current.label,
+            stationType: entry.station_type ?? current.stationType,
+            cost: entry.cost ?? current.cost,
+            speedKmh: entry.speed_kmh ?? current.speedKmh,
+            crew: entry.crew ?? current.crew,
+          };
+
+          if (entry.enabled === false) {
+            nextDisabled.add(type);
+          }
+        });
+
+        if (mounted && nextDisabled.size > 0) {
+          setDisabledVehicleTypes(Array.from(nextDisabled));
+        }
+      } catch {
+        // Keep built-in defaults when no JSON is present.
+      }
+    };
+
+    void loadVehicleCatalog();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -702,15 +862,26 @@ export default function Page() {
         ),
       );
 
+      const requiredCounts = currentStage
+        ? requirementCounts(currentStage.required)
+        : {};
+      const arrivedCounts = assigned.reduce(
+        (counts, vehicle) => {
+          if (!(vehicle.status === "DISPATCHED" && vehicle.eta <= 0)) {
+            return counts;
+          }
+          return {
+            ...counts,
+            [vehicle.type]: (counts[vehicle.type] ?? 0) + 1,
+          };
+        },
+        {} as Partial<Record<VehicleType, number>>,
+      );
       const atScene =
         !!currentStage &&
-        currentStage.required.every((requiredType) =>
-          assigned.some(
-            (vehicle) =>
-              vehicle.type === requiredType &&
-              vehicle.status === "DISPATCHED" &&
-              vehicle.eta <= 0,
-          ),
+        Object.entries(requiredCounts).every(
+          ([type, count]) =>
+            (arrivedCounts[type as VehicleType] ?? 0) >= (count ?? 0),
         );
       const hasVehicleOnWay = assigned.some(
         (vehicle) => vehicle.status === "DISPATCHED" && vehicle.eta > 0,
@@ -1217,26 +1388,27 @@ export default function Page() {
     (state: GameState) => {
       if (missionCatalog.length === 0) return [] as SpawnableMission[];
 
-      const fireStations = state.stations.filter((s) => s.type === "FIRE").length;
-      const ambulanceStations = state.stations.filter((s) => s.type === "EMS").length;
-      const policeStations = state.stations.filter((s) => s.type === "POLICE").length;
-      const availableVehicleTypes = new Set(state.vehicles.map((vehicle) => vehicle.type));
+      const availableVehicleCounts = state.vehicles.reduce(
+        (counts, vehicle) => ({
+          ...counts,
+          [vehicle.type]: (counts[vehicle.type] ?? 0) + 1,
+        }),
+        {} as Partial<Record<VehicleType, number>>,
+      );
 
       return missionCatalog
-        .filter((mission) => {
-          const prereq = mission.prerequisites ?? {};
-          if ((prereq.fire_stations ?? 0) > fireStations) return false;
-          if ((prereq.ambulance_stations ?? 0) > ambulanceStations) return false;
-          if ((prereq.police_stations ?? 0) > policeStations) return false;
-          return true;
-        })
-        .map(missionToTemplate)
+        .filter((mission) => meetsMissionPrerequisites(mission.prerequisites, state))
+        .map((mission) => missionToTemplate(mission, state))
         .filter((template): template is SpawnableMission => Boolean(template))
-        .filter((template) =>
-          template.stages[0].required.every((requiredType) =>
-            availableVehicleTypes.has(requiredType),
-          ),
-        );
+        .filter((template) => {
+          return template.stages.every((stage) => {
+            const requiredCounts = requirementCounts(stage.required);
+            return Object.entries(requiredCounts).every(([type, count]) => {
+              const owned = availableVehicleCounts[type as VehicleType] ?? 0;
+              return owned >= (count ?? 0);
+            });
+          });
+        });
     },
     [missionCatalog],
   );
@@ -1250,7 +1422,7 @@ export default function Page() {
       if (
         available.length === 0 ||
         current.stations.length === 0 ||
-        activeCount >= 2
+        activeCount >= Math.max(1, current.vehicles.length)
       )
         return current;
 
@@ -1358,9 +1530,12 @@ export default function Page() {
   }
 
   async function dispatchRequiredVehicles(incident: Incident) {
-    for (const requiredType of [...new Set(incident.stages[incident.currentStage]?.required ?? [])]) {
+    for (const requiredType of incident.stages[incident.currentStage]?.required ?? []) {
       const matchingVehicle = game.vehicles.find(
-        (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === requiredType,
+        (vehicle) =>
+          vehicle.status === "AVAILABLE" &&
+          vehicle.type === requiredType &&
+          !incident.assignedVehicleIds.includes(vehicle.id),
       );
       if (!matchingVehicle) continue;
       await dispatch(matchingVehicle.id, incident.id);
@@ -1494,40 +1669,50 @@ export default function Page() {
         });
 
         const nextIncidents = current.incidents.map((incident) => {
-          if (incident.status === "COMPLETE") return incident;
-          const stage = incident.stages[incident.currentStage];
-          if (!stage) return incident;
+          let nextIncident = incident;
+          if (nextIncident.status === "COMPLETE") return nextIncident;
+          let stage = nextIncident.stages[nextIncident.currentStage];
+          if (!stage) return nextIncident;
 
-          const assignedVehicles = incident.assignedVehicleIds
+          const assignedVehicles = nextIncident.assignedVehicleIds
             .map((id) => nextVehicles.find((v) => v.id === id))
             .filter((v): v is Vehicle => Boolean(v));
 
           const finalStageComplete =
-            incident.currentStage >= incident.stages.length - 1 &&
-            incident.stageWorkRemaining <= 0;
+            nextIncident.currentStage >= nextIncident.stages.length - 1 &&
+            nextIncident.stageWorkRemaining <= 0;
 
           if (!finalStageComplete) {
-            const hasAllRequired = stage.required.every((requiredType) =>
-              assignedVehicles.some(
-                (vehicle) =>
-                  vehicle.type === requiredType &&
-                  vehicle.status === "DISPATCHED" &&
-                  vehicle.eta <= 0,
-              ),
+            const requiredCounts = requirementCounts(stage.required);
+            const arrivedCounts = assignedVehicles.reduce(
+              (counts, vehicle) => {
+                if (!(vehicle.status === "DISPATCHED" && vehicle.eta <= 0)) {
+                  return counts;
+                }
+                return {
+                  ...counts,
+                  [vehicle.type]: (counts[vehicle.type] ?? 0) + 1,
+                };
+              },
+              {} as Partial<Record<VehicleType, number>>,
             );
-            if (!hasAllRequired) return incident;
+            const hasAllRequired = Object.entries(requiredCounts).every(
+              ([type, count]) =>
+                (arrivedCounts[type as VehicleType] ?? 0) >= (count ?? 0),
+            );
+            if (!hasAllRequired) return nextIncident;
           }
 
-          if (incident.stageWorkRemaining > 0) {
+          if (nextIncident.stageWorkRemaining > 0) {
             return {
-              ...incident,
-              stageWorkRemaining: incident.stageWorkRemaining - 1,
+              ...nextIncident,
+              stageWorkRemaining: nextIncident.stageWorkRemaining - 1,
             };
           }
 
-          const nextStage = incident.currentStage + 1;
-          if (nextStage >= incident.stages.length) {
-            const assignedIds = new Set(incident.assignedVehicleIds);
+          const nextStage = nextIncident.currentStage + 1;
+          if (nextStage >= nextIncident.stages.length) {
+            const assignedIds = new Set(nextIncident.assignedVehicleIds);
             const anyDispatched = nextVehicles.some(
               (vehicle) =>
                 assignedIds.has(vehicle.id) &&
@@ -1545,7 +1730,7 @@ export default function Page() {
                   (s) => s.id === vehicle.stationId,
                 );
                 if (!station) return vehicle;
-                const returnKm = haversineKm(station, incident);
+                const returnKm = haversineKm(station, nextIncident);
                 const returnEta = Math.max(
                   8,
                   Math.round(
@@ -1556,14 +1741,14 @@ export default function Page() {
                 return {
                   ...vehicle,
                   status: "RETURNING" as VehicleStatus,
-                  incidentId: incident.id,
+                  incidentId: nextIncident.id,
                   eta: returnEta,
                   totalEta: returnEta,
                   route:
                     vehicle.route.length >= 2
                       ? [...vehicle.route].reverse()
                       : [
-                          [incident.lng, incident.lat],
+                          [nextIncident.lng, nextIncident.lat],
                           [station.lng, station.lat],
                         ],
                 };
@@ -1576,20 +1761,20 @@ export default function Page() {
                 (vehicle.status === "AVAILABLE" && vehicle.incidentId === null),
             );
             const nextFiling = allBackAtStation
-              ? Math.max(incident.filingRemaining - 1, 0)
-              : incident.filingRemaining;
+              ? Math.max(nextIncident.filingRemaining - 1, 0)
+              : nextIncident.filingRemaining;
             if (allBackAtStation && nextFiling === 0) {
               const missionCrewCost = assignedVehicles.reduce(
                 (sum, vehicle) =>
                   sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
                 0,
               );
-              creditsEarned += incident.reward - missionCrewCost;
+              creditsEarned += nextIncident.reward - missionCrewCost;
               progressNotes.push(
-                `${incident.title} completed (+${incident.reward}, payroll -${missionCrewCost}).`,
+                `${nextIncident.title} completed (+${nextIncident.reward}, payroll -${missionCrewCost}).`,
               );
               return {
-                ...incident,
+                ...nextIncident,
                 status: "COMPLETE" as IncidentStatus,
                 filingRemaining: 0,
                 stageWorkRemaining: 0,
@@ -1597,17 +1782,17 @@ export default function Page() {
             }
 
             return {
-              ...incident,
+              ...nextIncident,
               filingRemaining: nextFiling,
               stageWorkRemaining: 0,
             };
           }
 
           progressNotes.push(
-            `${incident.title}: moved to stage ${nextStage + 1}.`,
+            `${nextIncident.title}: moved to stage ${nextStage + 1}.`,
           );
           return {
-            ...incident,
+            ...nextIncident,
             currentStage: nextStage,
             stageWorkRemaining: STAGE_WORK_SECONDS,
             stageWorkTotal: STAGE_WORK_SECONDS,
@@ -1617,10 +1802,11 @@ export default function Page() {
         const activeCount = nextIncidents.filter(
           (incident) => incident.status !== "COMPLETE",
         ).length;
+        const maxActiveIncidents = Math.max(1, current.vehicles.length);
 
         const shouldSpawn =
           current.stations.length > 0 &&
-          (activeCount < 1 || (Math.random() < 0.08 && activeCount < 2));
+          (activeCount < 1 || (Math.random() < 0.08 && activeCount < maxActiveIncidents));
 
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
@@ -2014,7 +2200,7 @@ export default function Page() {
                   .filter(
                     (type) =>
                       VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                      !DISABLED_VEHICLE_TYPES.includes(type),
+                      !disabledVehicleTypes.includes(type),
                   )
                   .map((type) => {
                     const config = VEHICLE_TYPES[type];
