@@ -879,25 +879,26 @@ export default function Page() {
       }
 
       let countryMissions: MissionDefinition[] = [];
-      try {
-        const countryResponse = await fetch(
-          `/missions/${game.activeCountryCode}.json`,
-        );
-        if (countryResponse.ok) {
-          countryMissions = (await countryResponse.json()) as MissionDefinition[];
+      const countryMissionPaths = [
+        `/missions/${game.activeCountryCode}.json`,
+        `/missions/${game.activeCountryCode.toLowerCase()}.json`,
+      ];
+      for (const path of countryMissionPaths) {
+        try {
+          const countryResponse = await fetch(path);
+          if (countryResponse.ok) {
+            countryMissions = (await countryResponse.json()) as MissionDefinition[];
+            if (countryMissions.length > 0) break;
+          }
+        } catch {
+          // Try next path variant.
         }
-      } catch {
-        countryMissions = [];
       }
 
-      const merged = new Map<string, MissionDefinition>();
-      defaultMissions.forEach((mission) => merged.set(mission.id, mission));
-      countryMissions.forEach((mission) => {
-        const base = merged.get(mission.id);
-        merged.set(mission.id, base ? { ...base, ...mission } : mission);
-      });
+      const nextCatalog =
+        countryMissions.length > 0 ? countryMissions : defaultMissions;
 
-      if (mounted) setMissionCatalog(Array.from(merged.values()));
+      if (mounted) setMissionCatalog(nextCatalog);
     };
 
     void loadMissionsForCountry();
