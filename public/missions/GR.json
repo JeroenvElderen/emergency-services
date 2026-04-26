@@ -1,14 +1,14 @@
 [
   {
-    "id": "100",
-    "name": "Bus Stop Waste Bin Fire",
-    "average_credits": 480,
+    "id": "",
+    "name": "",
+    "average_credits": 0,
     "requirements": {
-      "firetrucks": 1
+      "firetrucks": 0
     },
     "prerequisites": {
       "main_building": 0,
-      "fire_stations": 1
+      "fire_stations": 100
     },
     "mission_categories": [
       "fire",

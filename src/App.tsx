@@ -137,6 +137,9 @@ type IncidentNotification = {
   title: string;
   category: IncidentCategory;
   reward: number;
+  severity: number;
+  stageLabel: string;
+  required: VehicleType[];
 };
 
 type GameState = {
@@ -673,6 +676,21 @@ const INCIDENT_MARKER_PHASE_STYLES: Record<
   RETURNING: { label: "Truck returning", background: "#2563eb" },
   FILING: { label: "Filing report", background: "#6b7280" },
 };
+
+const VEHICLE_ROUTE_COLORS = [
+  "#ef4444",
+  "#f59e0b",
+  "#10b981",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+  "#f97316",
+];
+
+function getVehicleRouteColor(vehicleId: number) {
+  return VEHICLE_ROUTE_COLORS[vehicleId % VEHICLE_ROUTE_COLORS.length];
+}
 
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
   const assigned = vehicles.filter((vehicle) => vehicle.incidentId === incident.id);
@@ -1426,7 +1444,7 @@ export default function Page() {
         };
       });
     });
-  }, [game.incidents, game.stations, game.vehicles, mapToken]);
+  }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -1547,10 +1565,12 @@ export default function Page() {
             type: "line",
             source: routeId,
             paint: {
-              "line-color":
-                vehicle.status === "RETURNING" ? "#2563eb" : "#dc2626",
-              "line-width": 3,
+              "line-color": getVehicleRouteColor(vehicle.id),
+              "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
               "line-opacity": 0.8,
+              ...(vehicle.status === "RETURNING"
+                ? { "line-dasharray": [1.4, 1.2] }
+                : {}),
             },
           });
         };
@@ -1724,7 +1744,6 @@ export default function Page() {
       ? ([roadStart, ...route.coordinates.slice(1)] as [number, number][])
       : null;
 
-    lastVehicleTickAtRef.current = Date.now();
     setGame((current) => {
       const vehicle = current.vehicles.find((v) => v.id === vehicleId);
       const incident = current.incidents.find((i) => i.id === incidentId);
@@ -2168,6 +2187,9 @@ export default function Page() {
               title: incident.title,
               category: incident.category,
               reward: incident.reward,
+              severity: incident.severity,
+              stageLabel: incident.stages[0]?.label ?? "Response",
+              required: incident.stages[0]?.required ?? [],
             });
           }
         }
@@ -2631,20 +2653,42 @@ export default function Page() {
 
               <p className="mt-1 text-sm font-semibold text-slate-100">{notice.title}</p>
               <p className="mt-1 text-xs text-slate-300">
-                Type: {notice.category} • Reward: {notice.reward}
+                Type: {notice.category} • Severity: {notice.severity} • Reward: {notice.reward}
               </p>
-              <Button
-                size="sm"
-                className="mt-2 w-full"
-                onClick={() => {
-                  setFocusedIncidentId(notice.id);
-                  setIncidentNotifications((current) =>
-                    current.filter((item) => item.id !== notice.id),
-                  );
-                }}
-              >
-                Focus on map
-              </Button>
+              <p className="mt-1 text-xs text-slate-400">
+                Stage: {notice.stageLabel} • Required: {notice.required.join(", ") || "Any"}
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const incident = game.incidents.find((item) => item.id === notice.id);
+                    if (incident) void dispatchRequiredVehicles(incident);
+                  }}
+                >
+                  Dispatch now
+                </Button>
+                <Button
+                  size="sm"
+                  className="w-full"
+                  onClick={() => {
+                    const incident = game.incidents.find((item) => item.id === notice.id);
+                    if (!incident) return;
+                    mapRef.current?.flyTo({
+                      center: [incident.lng, incident.lat],
+                      zoom: Math.max(mapRef.current.getZoom(), 12),
+                      essential: true,
+                    });
+                    setFocusedIncidentId(notice.id);
+                    setIncidentNotifications((current) =>
+                      current.filter((item) => item.id !== notice.id),
+                    );
+                  }}
+                >
+                  Focus on map
+                </Button>
+              </div>
             </div>
           ))}
         </div>
