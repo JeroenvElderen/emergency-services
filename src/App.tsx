@@ -738,6 +738,8 @@ export default function Page() {
   const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
+  const lastVehicleTickAtRef = useRef(0);
   const routeLayerIdsRef = useRef<string[]>([]);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
@@ -763,6 +765,10 @@ export default function Page() {
       zoom: country.zoom,
       essential: true,
     });
+  }, []);
+
+  useEffect(() => {
+    lastVehicleTickAtRef.current = Date.now();
   }, []);
 
   useEffect(() => {
@@ -851,6 +857,20 @@ export default function Page() {
   const activeIncidents = game.incidents.filter(
     (incident) => incident.status !== "COMPLETE",
   );
+  const getSmoothedProgress = useCallback((vehicle: Vehicle) => {
+    const isMoving =
+      vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING";
+    const elapsedSinceTick = Math.max(
+      0,
+      (Date.now() - lastVehicleTickAtRef.current) / 1000,
+    );
+    const smoothEta =
+      isMoving && vehicle.eta > 0
+        ? Math.max(vehicle.eta - Math.min(elapsedSinceTick, 0.98), 0)
+        : Math.max(vehicle.eta, 0);
+
+    return vehicle.totalEta <= 0 ? 1 : 1 - smoothEta / vehicle.totalEta;
+  }, []);
   const hasStarted = game.stations.length > 0;
   const activeVehicleCount = game.vehicles.filter(
     (vehicle) =>
@@ -1240,6 +1260,117 @@ export default function Page() {
   }, [isSelectingRealStation, loadRealStations]);
 
   useEffect(() => {
+    const activeReturningIds = new Set(
+      game.vehicles
+        .filter(
+          (vehicle) =>
+            vehicle.status === "RETURNING" && vehicle.incidentId !== null,
+        )
+        .map((vehicle) => vehicle.id),
+    );
+    pendingReturnRouteVehicleIdsRef.current.forEach((vehicleId) => {
+      if (!activeReturningIds.has(vehicleId)) {
+        pendingReturnRouteVehicleIdsRef.current.delete(vehicleId);
+      }
+    });
+
+    if (!mapToken) return;
+
+    const rerouteCandidates = game.vehicles.filter((vehicle) => {
+      if (vehicle.status !== "RETURNING" || vehicle.incidentId === null) return false;
+      return !pendingReturnRouteVehicleIdsRef.current.has(vehicle.id);
+    });
+
+    if (rerouteCandidates.length === 0) return;
+
+    rerouteCandidates.forEach((vehicle) => {
+      pendingReturnRouteVehicleIdsRef.current.add(vehicle.id);
+    });
+
+    void Promise.all(
+      rerouteCandidates.map(async (vehicle) => {
+        const station = game.stations.find((s) => s.id === vehicle.stationId);
+        const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
+        if (!station || !incident) return null;
+        const route = await fetchRoadRoute(incident, station, mapToken);
+        if (!route) return null;
+        return {
+          vehicleId: vehicle.id,
+          incidentId: incident.id,
+          stationId: station.id,
+          coordinates: route.coordinates,
+          distanceKm: route.distanceKm,
+        };
+      }),
+    ).then((results) => {
+      const validResults = results.filter(
+        (result): result is {
+          vehicleId: number;
+          incidentId: number;
+          stationId: number;
+          coordinates: [number, number][];
+          distanceKm: number;
+        } => Boolean(result),
+      );
+      if (validResults.length === 0) return;
+
+      setGame((current) => {
+        const updates = new Map(validResults.map((item) => [item.vehicleId, item]));
+        const nextVehicles = current.vehicles.map((vehicle) => {
+          const update = updates.get(vehicle.id);
+          if (!update) return vehicle;
+          if (
+            vehicle.status !== "RETURNING" ||
+            vehicle.incidentId !== update.incidentId ||
+            vehicle.stationId !== update.stationId
+          ) {
+            return vehicle;
+          }
+
+          const station = current.stations.find((s) => s.id === vehicle.stationId);
+          if (!station) return vehicle;
+          const weatherMultiplier =
+            WEATHER_EFFECTS[current.weather].speedMultiplier;
+          const traffic = getRushHourModifier();
+          const dispatchUpgrade =
+            1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
+          const newTotalEta = Math.max(
+            8,
+            Math.round(
+              (update.distanceKm /
+                (VEHICLE_TYPES[vehicle.type].speedKmh *
+                  weatherMultiplier *
+                  traffic.trafficMultiplier *
+                  dispatchUpgrade)) *
+                3600,
+            ),
+          );
+          const currentProgress =
+            vehicle.totalEta <= 0
+              ? 0
+              : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
+          const adjustedEta = Math.max(
+            0,
+            Math.round(newTotalEta * (1 - Math.min(Math.max(currentProgress, 0), 1))),
+          );
+
+          return {
+            ...vehicle,
+            route: update.coordinates,
+            totalEta: newTotalEta,
+            eta: adjustedEta,
+          };
+        });
+
+        return {
+          ...current,
+          vehicles: nextVehicles,
+        };
+      });
+    });
+  }, [game.incidents, game.stations, game.vehicles, mapToken]);
+
+  useEffect(() => {
     if (!mapRef.current) return;
 
     routeLayerIdsRef.current.forEach((id) => {
@@ -1320,10 +1451,7 @@ export default function Page() {
       const station = game.stations.find((s) => s.id === vehicle.stationId);
       const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
       if (!station || !incident) return;
-      const progress =
-        vehicle.totalEta <= 0
-          ? 1
-          : 1 - Math.max(vehicle.eta, 0) / vehicle.totalEta;
+      const progress = getSmoothedProgress(vehicle);
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
@@ -1445,10 +1573,42 @@ export default function Page() {
     game.incidents,
     game.stations,
     game.vehicles,
+    getSmoothedProgress,
     isSelectingRealStation,
     realStations,
     selectedBuild,
   ]);
+
+  useEffect(() => {
+    let frameId = 0;
+
+    const animateVehicles = () => {
+      if (mapRef.current) {
+        game.vehicles.forEach((vehicle) => {
+          const moving =
+            vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING";
+          if (!moving || vehicle.incidentId === null) return;
+
+          const marker = vehicleMarkerRefs.current.get(vehicle.id);
+          if (!marker) return;
+
+          const station = game.stations.find((s) => s.id === vehicle.stationId);
+          const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
+          if (!station || !incident) return;
+
+          const progress = getSmoothedProgress(vehicle);
+          const fallback = vehicle.status === "DISPATCHED" ? station : incident;
+          const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
+          marker.setLngLat([lng, lat]);
+        });
+      }
+
+      frameId = window.requestAnimationFrame(animateVehicles);
+    };
+
+    frameId = window.requestAnimationFrame(animateVehicles);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [game.incidents, game.stations, game.vehicles, getSmoothedProgress]);
 
   const chooseIncidentTemplates = useCallback(
     (state: GameState) => {
@@ -1505,6 +1665,7 @@ export default function Page() {
       ? ([roadStart, ...route.coordinates.slice(1)] as [number, number][])
       : null;
 
+    lastVehicleTickAtRef.current = Date.now();
     setGame((current) => {
       const vehicle = current.vehicles.find((v) => v.id === vehicleId);
       const incident = current.incidents.find((i) => i.id === incidentId);
@@ -1692,6 +1853,7 @@ export default function Page() {
 
   useEffect(() => {
     const timer = setInterval(() => {
+      lastVehicleTickAtRef.current = Date.now();
       const spawnedNotifications: IncidentNotification[] = [];
       let earnedThisTick = 0;
       setGame((current) => {
@@ -1725,9 +1887,9 @@ export default function Page() {
         });
 
         const nextIncidents = current.incidents.map((incident) => {
-          let nextIncident = incident;
+          const nextIncident = incident;
           if (nextIncident.status === "COMPLETE") return nextIncident;
-          let stage = nextIncident.stages[nextIncident.currentStage];
+          const stage = nextIncident.stages[nextIncident.currentStage];
           if (!stage) return nextIncident;
 
           const assignedVehicles = nextIncident.assignedVehicleIds
@@ -1795,7 +1957,7 @@ export default function Page() {
                 const returnEta = Math.max(
                   8,
                   Math.round(
-                    (returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600,(returnKm /
+                    (returnKm /
                       (VEHICLE_TYPES[vehicle.type].speedKmh *
                         weatherMultiplier *
                         traffic.trafficMultiplier *
@@ -1810,13 +1972,10 @@ export default function Page() {
                   incidentId: nextIncident.id,
                   eta: returnEta,
                   totalEta: returnEta,
-                  route:
-                    vehicle.route.length >= 2
-                      ? [...vehicle.route].reverse()
-                      : [
-                          [nextIncident.lng, nextIncident.lat],
-                          [station.lng, station.lat],
-                        ],
+                  route: [
+                    [nextIncident.lng, nextIncident.lat],
+                    [station.lng, station.lat],
+                  ],
                 };
               });
             }

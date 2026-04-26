@@ -4,7 +4,7 @@
     "label": "Engine",
     "station_type": "FIRE",
     "cost": 75000,
-    "speed_kmh": 70,
+    "speed_kmh": 50,
     "crew": 5,
     "enabled": true
   },
