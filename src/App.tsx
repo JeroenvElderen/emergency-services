@@ -692,6 +692,12 @@ function getVehicleRouteColor(vehicleId: number) {
   return VEHICLE_ROUTE_COLORS[vehicleId % VEHICLE_ROUTE_COLORS.length];
 }
 
+const VEHICLE_ROUTE_OFFSETS = [0, 2, -2, 4, -4, 6, -6, 8];
+
+function getVehicleRouteOffset(vehicleId: number) {
+  return VEHICLE_ROUTE_OFFSETS[vehicleId % VEHICLE_ROUTE_OFFSETS.length];
+}
+
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
   const assigned = vehicles.filter((vehicle) => vehicle.incidentId === incident.id);
   const hasReturning = assigned.some((vehicle) => vehicle.status === "RETURNING");
@@ -1514,6 +1520,20 @@ export default function Page() {
       );
     });
 
+    const movingVehicleIds = game.vehicles
+      .filter(
+        (vehicle) =>
+          (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+          vehicle.incidentId !== null,
+      )
+      .map((vehicle) => vehicle.id)
+      .sort((a, b) => a - b);
+    const routeOffsetByVehicleId = new Map<number, number>();
+    const offsetCenter = (movingVehicleIds.length - 1) / 2;
+    movingVehicleIds.forEach((vehicleId, index) => {
+      routeOffsetByVehicleId.set(vehicleId, (index - offsetCenter) * 1.8);
+    });
+
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
         (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
@@ -1532,8 +1552,12 @@ export default function Page() {
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
+     const routeToRender =
+        remainingRoute.length >= 3 || vehicle.route.length < 2
+          ? remainingRoute
+          : vehicle.route;
 
-      if (shouldRenderVehicle && remainingRoute.length >= 2) {
+      if (shouldRenderVehicle && routeToRender.length >= 2) {
         const routeId = `vehicle-route-${vehicle.id}`;
         const addRouteLayer = () => {
           if (!mapRef.current) return;
@@ -1554,7 +1578,7 @@ export default function Page() {
               type: "Feature",
               geometry: {
                 type: "LineString",
-                coordinates: remainingRoute,
+                coordinates: routeToRender,
               },
               properties: {},
             },
@@ -1567,6 +1591,7 @@ export default function Page() {
             paint: {
               "line-color": getVehicleRouteColor(vehicle.id),
               "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
+              "line-offset": routeOffsetByVehicleId.get(vehicle.id) ?? 0,
               "line-opacity": 0.8,
               ...(vehicle.status === "RETURNING"
                 ? { "line-dasharray": [1.4, 1.2] }
