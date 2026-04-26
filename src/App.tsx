@@ -38,6 +38,11 @@ type Station = {
   name: string;
   type: StationType;
   level: number;
+  upgrades: {
+    bayCapacity: number;
+    trainingWing: number;
+    dispatchCenter: number;
+  };
   lat: number;
   lng: number;
 };
@@ -139,6 +144,14 @@ type GameState = {
   vehicles: Vehicle[];
   incidents: Incident[];
   log: string[];
+  reputation: number;
+  weather: "CLEAR" | "RAIN" | "SNOW" | "HEAT";
+  weatherTimer: number;
+};
+
+type IncomeToast = {
+  id: number;
+  amount: number;
 };
 
 const STATION_COST = 120000;
@@ -149,6 +162,16 @@ const PAYROLL_PER_EMPLOYEE = 45;
 const COUNTRY_LICENSE_COST = 300000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
+const WEATHER_INTERVAL_SECONDS = 75;
+const WEATHER_EFFECTS: Record<
+  GameState["weather"],
+  { speedMultiplier: number; incidentMultiplier: number; label: string }
+> = {
+  CLEAR: { speedMultiplier: 1, incidentMultiplier: 1, label: "Clear" },
+  RAIN: { speedMultiplier: 0.84, incidentMultiplier: 1.18, label: "Rain" },
+  SNOW: { speedMultiplier: 0.72, incidentMultiplier: 1.24, label: "Snow" },
+  HEAT: { speedMultiplier: 0.9, incidentMultiplier: 1.12, label: "Heat" },
+};
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
 
@@ -277,10 +300,29 @@ const initialState: GameState = {
   vehicles: [],
   incidents: [],
   log: ["Place your first building on the map to start the game."],
+  reputation: 50,
+  weather: "CLEAR",
+  weatherTimer: WEATHER_INTERVAL_SECONDS,
 };
 
 const rand = (min: number, max: number) =>
   Math.floor(Math.random() * (max - min + 1)) + min;
+
+function getRushHourModifier() {
+  const now = new Date();
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      hour12: false,
+      timeZone: "Europe/Berlin",
+    }).format(now),
+  );
+  const isRushHour = (hour >= 7 && hour <= 9) || (hour >= 16 && hour <= 19);
+  const isLateNight = hour >= 23 || hour <= 4;
+  const trafficMultiplier = isRushHour ? 0.72 : isLateNight ? 1.08 : 0.92;
+  const label = isRushHour ? "Rush hour" : isLateNight ? "Late night" : "Normal traffic";
+  return { trafficMultiplier, label };
+}
 
 function requirementCounts(required: VehicleType[]) {
   return required.reduce(
@@ -307,8 +349,8 @@ function haversineKm(
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function stationCapacity(level: number) {
-  return 4 + (level - 1) * 2;
+function stationCapacity(station: Pick<Station, "level" | "upgrades">) {
+  return 4 + (station.level - 1) * 2 + station.upgrades.bayCapacity * 2;
 }
 
 function starterVehicleType(stationType: StationType): VehicleType {
@@ -449,11 +491,22 @@ function loadGame(): GameState {
     return {
       ...parsed,
       employees: parsed.employees ?? 10,
+      reputation: Math.max(0, Math.min(100, parsed.reputation ?? 50)),
+      weather: parsed.weather ?? "CLEAR",
+      weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
       homeCountryCode,
       activeCountryCode,
       unlockedCountryCodes: unlockedCountryCodes.includes(homeCountryCode)
         ? unlockedCountryCodes
         : [homeCountryCode, ...unlockedCountryCodes],
+      stations: parsed.stations.map((station) => ({
+        ...station,
+        upgrades: station.upgrades ?? {
+          bayCapacity: Math.max(station.level - 1, 0),
+          trainingWing: 0,
+          dispatchCenter: 0,
+        },
+      })),
       incidents: parsed.incidents.map((incident) => ({
         ...incident,
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
@@ -678,6 +731,7 @@ export default function Page() {
   const [incidentNotifications, setIncidentNotifications] = useState<
     IncidentNotification[]
   >([]);
+  const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -971,6 +1025,11 @@ export default function Page() {
           name: `${label} Station ${id}`,
           type,
           level: 1,
+          upgrades: {
+            bayCapacity: 0,
+            trainingWing: 0,
+            dispatchCenter: 0,
+          },
           lat,
           lng,
         };
@@ -1430,7 +1489,15 @@ export default function Page() {
 
     const route = await fetchRoadRoute(station, incident, mapToken);
     const km = route?.distanceKm ?? haversineKm(station, incident);
-    const speed = VEHICLE_TYPES[vehicle.type].speedKmh;
+    const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
+    const traffic = getRushHourModifier();
+    const dispatchUpgrade =
+      1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
+    const speed =
+      VEHICLE_TYPES[vehicle.type].speedKmh *
+      weatherMultiplier *
+      traffic.trafficMultiplier *
+      dispatchUpgrade;
     const eta = Math.max(8, Math.round((km / speed) * 3600));
 
     const roadStart = nudgePointToward(station, incident);
@@ -1519,7 +1586,7 @@ export default function Page() {
       const used = current.vehicles.filter(
         (v) => v.stationId === station.id,
       ).length;
-      if (used >= stationCapacity(station.level)) return current;
+      if (used >= stationCapacity(station)) return current;
 
       const id = current.nextVehicleId;
       const vehicle: Vehicle = {
@@ -1547,23 +1614,53 @@ export default function Page() {
     });
   }
 
-  function upgradeStation(stationId: number) {
+  function upgradeStationBranch(
+    stationId: number,
+    branch: keyof Station["upgrades"],
+  ) {
     setGame((current) => {
       const station = current.stations.find((s) => s.id === stationId);
       if (!station) return current;
-      const cost = UPGRADE_BASE_COST + station.level * 25000;
+      const currentTier = station.upgrades[branch];
+      const cost = Math.round((UPGRADE_BASE_COST * 0.45) + (currentTier + 1) * 18000);
       if (current.credits < cost) return current;
 
       return {
         ...current,
         credits: current.credits - cost,
         stations: current.stations.map((item) =>
-          item.id === stationId ? { ...item, level: item.level + 1 } : item,
+          item.id === stationId
+            ? {
+                ...item,
+                level: item.level + 1,
+                upgrades: {
+                  ...item.upgrades,
+                  [branch]: item.upgrades[branch] + 1,
+                },
+              }
+            : item,
         ),
         log: [
-          `Upgraded ${station.name} to level ${station.level + 1}.`,
+          `Upgraded ${station.name}: ${branch} tier ${currentTier + 1}.`,
           ...current.log,
         ].slice(0, 10),
+      };
+    });
+  }
+
+  function startTrainingCourse(stationId: number, course: "TRIAGE" | "TACTICS" | "COMM") {
+    const costs = { TRIAGE: 2800, TACTICS: 4200, COMM: 3500 };
+    const repGain = { TRIAGE: 1, TACTICS: 2, COMM: 1 };
+    setGame((current) => {
+      const station = current.stations.find((s) => s.id === stationId);
+      if (!station) return current;
+      const cost = costs[course];
+      if (current.credits < cost) return current;
+      return {
+        ...current,
+        credits: current.credits - cost,
+        reputation: Math.min(100, current.reputation + repGain[course] + station.upgrades.trainingWing),
+        log: [`Training completed: ${course} at ${station.name}.`, ...current.log].slice(0, 10),
       };
     });
   }
@@ -1596,6 +1693,7 @@ export default function Page() {
   useEffect(() => {
     const timer = setInterval(() => {
       const spawnedNotifications: IncidentNotification[] = [];
+      let earnedThisTick = 0;
       setGame((current) => {
         let creditsEarned = 0;
         const progressNotes: string[] = [];
@@ -1689,10 +1787,20 @@ export default function Page() {
                 );
                 if (!station) return vehicle;
                 const returnKm = haversineKm(station, nextIncident);
+                const weatherMultiplier =
+                  WEATHER_EFFECTS[current.weather].speedMultiplier;
+                const traffic = getRushHourModifier();
+                const dispatchUpgrade =
+                  1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
                 const returnEta = Math.max(
                   8,
                   Math.round(
-                    (returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600,
+                    (returnKm / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600,(returnKm /
+                      (VEHICLE_TYPES[vehicle.type].speedKmh *
+                        weatherMultiplier *
+                        traffic.trafficMultiplier *
+                        dispatchUpgrade)) *
+                      3600,
                   ),
                 );
 
@@ -1727,9 +1835,18 @@ export default function Page() {
                   sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
                 0,
               );
-              creditsEarned += nextIncident.reward - missionCrewCost;
+              const trainingBonus = current.stations.reduce(
+                (sum, station) => sum + station.upgrades.trainingWing,
+                0,
+              );
+              const qualityMultiplier = 0.8 + current.reputation / 100;
+              const trainingMultiplier = 1 + trainingBonus * 0.01;
+              const payout = Math.round(
+                nextIncident.reward * qualityMultiplier * trainingMultiplier,
+              );
+              creditsEarned += payout - missionCrewCost;
               progressNotes.push(
-                `${nextIncident.title} completed (+${nextIncident.reward}, payroll -${missionCrewCost}).`,
+                `${nextIncident.title} completed (+${payout}, payroll -${missionCrewCost}).`,
               );
               return {
                 ...nextIncident,
@@ -1761,11 +1878,16 @@ export default function Page() {
           (incident) => incident.status !== "COMPLETE",
         ).length;
         const maxActiveIncidents = Math.max(1, current.vehicles.length);
+        const weatherIncidentMultiplier =
+          WEATHER_EFFECTS[current.weather].incidentMultiplier;
 
         const shouldSpawn =
           current.stations.length > 0 &&
           activeCount < maxActiveIncidents &&
-          Math.random() < (activeCount < 1 ? 0.2 : 0.08);
+          Math.random() <
+            (activeCount < 1 ? 0.2 : 0.08) *
+              weatherIncidentMultiplier *
+              (1 + (50 - current.reputation) / 220);
 
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
@@ -1803,7 +1925,9 @@ export default function Page() {
               reward: Math.max(
                 650,
                 Math.round(
-                  template.baseReward * (1.35 + (difficulty - 1) * 0.14),
+                  template.baseReward *
+                    (1.3 + (difficulty - 1) * 0.14) *
+                    (0.86 + (100 - current.reputation) / 240),
                 ),
               ),
               lat,
@@ -1829,10 +1953,30 @@ export default function Page() {
           }
         }
 
+        const nextWeatherTimer = current.weatherTimer - 1;
+        const weatherChanged = nextWeatherTimer <= 0;
+        const weatherPool: GameState["weather"][] = ["CLEAR", "RAIN", "SNOW", "HEAT"];
+        const nextWeather = weatherChanged
+          ? weatherPool[rand(0, weatherPool.length - 1)]
+          : current.weather;
+        const nextReputation = Math.max(
+          0,
+          Math.min(
+            100,
+            current.reputation +
+              (creditsEarned > 0 ? 1 : 0) -
+              (shouldSpawn && activeCount > maxActiveIncidents * 0.7 ? 1 : 0),
+          ),
+        );
+        earnedThisTick = creditsEarned;
+
         return {
           ...current,
           credits: nextCredits,
           resolvedCount: nextResolvedCount,
+          reputation: nextReputation,
+          weather: nextWeather,
+          weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
           nextIncidentId,
           vehicles: nextVehicles,
           incidents: finalIncidents,
@@ -1843,6 +1987,13 @@ export default function Page() {
         setIncidentNotifications((current) =>
           [...spawnedNotifications, ...current].slice(0, 3),
         );
+      }
+      if (earnedThisTick > 0) {
+        const toastId = Date.now() + Math.floor(Math.random() * 1000);
+        setIncomeToasts((current) => [...current, { id: toastId, amount: earnedThisTick }]);
+        window.setTimeout(() => {
+          setIncomeToasts((current) => current.filter((toast) => toast.id !== toastId));
+        }, 2800);
       }
     }, 1000);
 
@@ -1866,6 +2017,8 @@ export default function Page() {
     (selectedStationId &&
       game.stations.find((station) => station.id === selectedStationId)) ??
     null;
+  const trafficState = getRushHourModifier();
+  const weatherState = WEATHER_EFFECTS[game.weather];
 
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#0b1727] text-slate-100">
@@ -2004,10 +2157,19 @@ export default function Page() {
           </div>
         </div>
         <div className="grid grid-cols-2 gap-1.5">
-          <Badge tone="good">
-            <Coins className="mr-1 h-3 w-3" />
-            {game.credits}
-          </Badge>
+         <div className="relative">
+            <Badge tone="good">
+              <Coins className="mr-1 h-3 w-3" />
+              {game.credits}
+            </Badge>
+            <div className="pointer-events-none absolute -right-4 bottom-8 flex flex-col items-end gap-1">
+              {incomeToasts.map((toast) => (
+                <div key={toast.id} className="income-toast rounded-md bg-emerald-500/95 px-2 py-1 text-xs font-bold text-emerald-950 shadow">
+                  +{toast.amount}
+                </div>
+              ))}
+            </div>
+          </div>
           <Badge tone="blue">
             <Users className="mr-1 h-3 w-3" />
             {game.employees} staff
@@ -2023,6 +2185,9 @@ export default function Page() {
           </Badge>
           <Badge>{completedIncidents.length} closed</Badge>
           <Badge>{activeVehicleCount} active</Badge>
+          <Badge tone="blue">{weatherState.label}</Badge>
+          <Badge>{trafficState.label}</Badge>
+          <Badge tone="good">Rep {game.reputation}</Badge>
         </div>
 
         {buildPickerOpen && (
@@ -2103,7 +2268,7 @@ export default function Page() {
                 <p className="text-xs text-slate-400">
                   Level {selectedStation.level} • Capacity{" "}
                   {game.vehicles.filter((vehicle) => vehicle.stationId === selectedStation.id).length}
-                  /{stationCapacity(selectedStation.level)}
+                  /{stationCapacity(selectedStation)}
                 </p>
               </div>
               <Button size="sm" variant="outline" onClick={() => setSelectedStationId(null)}>
@@ -2128,10 +2293,26 @@ export default function Page() {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < UPGRADE_BASE_COST + selectedStation.level * 25000}
-                onClick={() => upgradeStation(selectedStation.id)}
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)}
+                onClick={() => upgradeStationBranch(selectedStation.id, "bayCapacity")}
               >
-                Upgrade ({UPGRADE_BASE_COST + selectedStation.level * 25000})
+                Bay +2 ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)})
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)}
+                onClick={() => upgradeStationBranch(selectedStation.id, "dispatchCenter")}
+              >
+                Dispatch ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)})
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)}
+                onClick={() => upgradeStationBranch(selectedStation.id, "trainingWing")}
+              >
+                Training Wing ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)})
               </Button>
               <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST} onClick={() => hireEmployee(1)}>
                 <UserPlus className="mr-1 h-3.5 w-3.5" />
@@ -2139,6 +2320,12 @@ export default function Page() {
               </Button>
               <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST * 5} onClick={() => hireEmployee(5)}>
                 Hire 5 ({HIRING_COST * 5})
+              </Button>
+              <Button size="sm" variant="outline" disabled={game.credits < 2800} onClick={() => startTrainingCourse(selectedStation.id, "TRIAGE")}>
+                Triage course (2800)
+              </Button>
+              <Button size="sm" variant="outline" disabled={game.credits < 4200} onClick={() => startTrainingCourse(selectedStation.id, "TACTICS")}>
+                Command course (4200)
               </Button>
             </div>
             <div className="mt-3">
@@ -2169,7 +2356,7 @@ export default function Page() {
                     const usedCapacity = game.vehicles.filter(
                       (vehicle) => vehicle.stationId === selectedStation.id,
                     ).length;
-                    const hasCapacity = usedCapacity < stationCapacity(selectedStation.level);
+                    const hasCapacity = usedCapacity < stationCapacity(selectedStation);
                     const hasStaff = unassignedEmployees >= config.crew;
                     const Icon =
                       type === "ENGINE" || type === "LADDER"
@@ -2264,19 +2451,6 @@ export default function Page() {
         }
         onDispatchVehicle={dispatch}
       />
-      
-      <div className="absolute bottom-[55vh] right-3 z-30 w-[360px] space-y-1">
-        <div className="space-y-1">
-          {game.log.slice(0, 4).map((entry, index) => (
-            <p
-              key={`${entry}-${index}`}
-              className="rounded-lg bg-slate-900/90 p-2 text-[11px] text-slate-300"
-            >
-              {entry}
-            </p>
-          ))}
-        </div>
-      </div>
     </main>
   );
 }
