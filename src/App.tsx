@@ -666,35 +666,6 @@ function getRoutePosition(
   ] as [number, number];
 }
 
-function getRemainingRoute(
-  route: [number, number][],
-  progress: number,
-  fallback: { lat: number; lng: number },
-) {
-  if (route.length < 2) {
-    const point = [fallback.lng, fallback.lat] as [number, number];
-    return [point, point] as [number, number][];
-  }
-  if (progress <= 0) return route;
-  if (progress >= 1) {
-    const last = route[route.length - 1];
-    return [last, last] as [number, number][];
-  }
-
-  const segmentProgress = progress * (route.length - 1);
-  const fromIndex = Math.floor(segmentProgress);
-  const toIndex = Math.min(route.length - 1, fromIndex + 1);
-  const localProgress = segmentProgress - fromIndex;
-  const from = route[fromIndex];
-  const to = route[toIndex];
-  const currentPoint = [
-    from[0] + (to[0] - from[0]) * localProgress,
-    from[1] + (to[1] - from[1]) * localProgress,
-  ] as [number, number];
-
-  return [currentPoint, ...route.slice(toIndex)] as [number, number][];
-}
-
 function Badge({
   children,
   tone = "default",
@@ -736,21 +707,6 @@ const INCIDENT_MARKER_PHASE_STYLES: Record<
   RETURNING: { label: "Truck returning", background: "#2563eb" },
   FILING: { label: "Filing report", background: "#6b7280" },
 };
-
-const VEHICLE_ROUTE_COLORS = [
-  "#ef4444",
-  "#f59e0b",
-  "#10b981",
-  "#06b6d4",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-  "#f97316",
-];
-
-function getVehicleRouteColor(vehicleId: number) {
-  return VEHICLE_ROUTE_COLORS[(vehicleId - 1) % VEHICLE_ROUTE_COLORS.length];
-}
 
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
   const assigned = vehicles.filter((vehicle) => vehicle.incidentId === incident.id);
@@ -840,7 +796,6 @@ export default function Page() {
   >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
-  const routeLayerIdsRef = useRef<string[]>([]);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
 
@@ -1509,116 +1464,8 @@ export default function Page() {
     });
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
-  const updateVehicleRouteLine = useCallback(
-    (vehicle: Vehicle, remainingRoute: [number, number][]) => {
-      const map = mapRef.current;
-      if (!map) return;
-
-      const routeId = `vehicle-route-${vehicle.id}`;
-      const sourceId = routeId;
-
-      const draw = () => {
-        if (!map.isStyleLoaded()) return;
-
-        if (remainingRoute.length < 2) {
-          if (map.getLayer(routeId)) map.removeLayer(routeId);
-          if (map.getSource(sourceId)) map.removeSource(sourceId);
-          routeLayerIdsRef.current = routeLayerIdsRef.current.filter(
-            (id) => id !== routeId,
-          );
-          return;
-        }
-
-        const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
-          type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: remainingRoute,
-          },
-          properties: {},
-        };
-
-        const source = map.getSource(sourceId) as mapboxgl.GeoJSONSource | undefined;
-
-      if (source) {
-          source.setData(routeData);
-        } else {
-          map.addSource(sourceId, {
-            type: "geojson",
-            data: routeData,
-          });
-        }
-
-      if (!map.getLayer(routeId)) {
-          map.addLayer({
-            id: routeId,
-            type: "line",
-            source: sourceId,
-            layout: {
-              "line-cap": "round",
-              "line-join": "round",
-            },
-            paint: {
-              "line-color": getVehicleRouteColor(vehicle.id),
-              "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
-              "line-opacity": 0.9,
-              ...(vehicle.status === "RETURNING"
-                ? { "line-dasharray": [1.4, 1.2] }
-                : {}),
-            },
-          });
-        }
-
-        if (!routeLayerIdsRef.current.includes(routeId)) {
-          routeLayerIdsRef.current.push(routeId);
-        }
-      };
-
-      if (map.isStyleLoaded()) {
-        draw();
-      } else {
-        map.once("styledata", draw);
-        map.once("idle", draw);
-      }
-    },
-    [],
-  );
-
   useEffect(() => {
     if (!mapRef.current) return;
-
-    const removeVehicleRoute = (vehicleId: number) => {
-      const routeId = `vehicle-route-${vehicleId}`;
-      if (mapRef.current?.getLayer(routeId)) mapRef.current.removeLayer(routeId);
-      if (mapRef.current?.getSource(routeId)) mapRef.current.removeSource(routeId);
-      routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) => id !== routeId);
-    };
-
-    const activeRouteIds = new Set(
-      game.vehicles
-        .filter((vehicle) => {
-          if (
-            vehicle.status !== "DISPATCHED" &&
-            vehicle.status !== "RETURNING"
-          ) {
-            return false;
-          }
-
-          if (vehicle.incidentId === null) return false;
-
-          return game.incidents.some((incident) => incident.id === vehicle.incidentId);
-        })
-        .map((vehicle) => `vehicle-route-${vehicle.id}`),
-    );
-
-    routeLayerIdsRef.current.forEach((id) => {
-      if (activeRouteIds.has(id)) return;
-      if (mapRef.current?.getLayer(id)) mapRef.current.removeLayer(id);
-      if (mapRef.current?.getSource(id)) mapRef.current.removeSource(id);
-    });
-    routeLayerIdsRef.current = routeLayerIdsRef.current.filter((id) =>
-      activeRouteIds.has(id),
-    );
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
     incidentMarkerRefs.current.forEach((marker) => marker.remove());
@@ -1692,7 +1539,6 @@ export default function Page() {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         vehicleProgressFloorRef.current.delete(vehicle.id);
-        removeVehicleRoute(vehicle.id);
         return;
       }
 
@@ -1702,7 +1548,6 @@ export default function Page() {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         vehicleProgressFloorRef.current.delete(vehicle.id);
-        removeVehicleRoute(vehicle.id);
         return;
       }
       const progress =
@@ -1710,9 +1555,14 @@ export default function Page() {
           ? 0.999
           : getSmoothedProgress(vehicle);
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
-      const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
-      const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
-      updateVehicleRouteLine(vehicle, remainingRoute);
+      const fullRoute =
+        vehicle.route.length >= 2
+          ? vehicle.route
+          : ([
+              [station.lng, station.lat],
+              [incident.lng, incident.lat],
+            ] as [number, number][]);
+      const [lng, lat] = getRoutePosition(fullRoute, progress, fallback);
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {
@@ -1786,7 +1636,6 @@ export default function Page() {
     isSelectingRealStation,
     realStations,
     selectedBuild,
-    updateVehicleRouteLine,
   ]);
 
   useEffect(() => {
@@ -1811,15 +1660,16 @@ export default function Page() {
               ? 0.999
               : getSmoothedProgress(vehicle);
           const fallback = vehicle.status === "DISPATCHED" ? station : incident;
-          const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
-          const remainingRoute = getRemainingRoute(
-            vehicle.route,
-            progress,
-            fallback,
-          );
+          const fullRoute =
+            vehicle.route.length >= 2
+              ? vehicle.route
+              : ([
+                  [station.lng, station.lat],
+                  [incident.lng, incident.lat],
+                ] as [number, number][]);
+          const [lng, lat] = getRoutePosition(fullRoute, progress, fallback);
 
           marker.setLngLat([lng, lat]);
-          updateVehicleRouteLine(vehicle, remainingRoute);
         });
       }
 
@@ -1833,7 +1683,6 @@ export default function Page() {
     game.stations,
     game.vehicles,
     getSmoothedProgress,
-    updateVehicleRouteLine,
   ]);
 
   const chooseIncidentTemplates = useCallback(
@@ -1932,7 +1781,13 @@ export default function Page() {
                 eta,
                 totalEta: eta,
                 incidentId,
-                route: roadRoute ?? [roadStart, [incident.lng, incident.lat]],
+                route:
+                  roadRoute && roadRoute.length >= 2
+                    ? roadRoute
+                    : [
+                        [station.lng, station.lat],
+                        [incident.lng, incident.lat],
+                      ],
               }
             : v,
         ),
