@@ -170,12 +170,13 @@ type IncomeToast = {
   amount: number;
 };
 
-const STATION_COST = 120000;
-const DISPATCH_COST = 90;
-const UPGRADE_BASE_COST = 75000;
-const HIRING_COST = 1600;
-const PAYROLL_PER_EMPLOYEE = 45;
-const COUNTRY_LICENSE_COST = 300000;
+// MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
+const STATION_COST = 100000;
+const DISPATCH_COST = 0;
+const UPGRADE_BASE_COST = 50000;
+const HIRING_COST = 500;
+const PAYROLL_PER_EMPLOYEE = 0;
+const COUNTRY_LICENSE_COST = 100000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const WEATHER_INTERVAL_SECONDS = 75;
@@ -244,7 +245,7 @@ const VEHICLE_TYPES = {
   ENGINE: {
     label: "Engine",
     stationType: "FIRE",
-    cost: 75000,
+    cost: 5000,
     speedKmh: 55,
     crew: 4,
     icon: Flame,
@@ -252,7 +253,7 @@ const VEHICLE_TYPES = {
   LADDER: {
     label: "Ladder",
     stationType: "FIRE",
-    cost: 120000,
+    cost: 10000,
     speedKmh: 48,
     crew: 5,
     icon: Truck,
@@ -260,7 +261,7 @@ const VEHICLE_TYPES = {
   AMBULANCE: {
     label: "Ambulance",
     stationType: "EMS",
-    cost: 190000,
+    cost: 5000,
     speedKmh: 65,
     crew: 2,
     icon: Ambulance,
@@ -268,7 +269,7 @@ const VEHICLE_TYPES = {
   RESCUE: {
     label: "Rescue",
     stationType: "EMS",
-    cost: 140000,
+    cost: 10000,
     speedKmh: 62,
     crew: 3,
     icon: Siren,
@@ -276,7 +277,7 @@ const VEHICLE_TYPES = {
   PATROL: {
     label: "Patrol",
     stationType: "POLICE",
-    cost: 45000,
+    cost: 2500,
     speedKmh: 70,
     crew: 1,
     icon: Shield,
@@ -284,7 +285,7 @@ const VEHICLE_TYPES = {
   SWAT: {
     label: "SWAT",
     stationType: "POLICE",
-    cost: 90000,
+    cost: 12500,
     speedKmh: 58,
     crew: 4,
     icon: Shield,
@@ -303,7 +304,7 @@ const VEHICLE_TYPES = {
 const DEFAULT_DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const initialState: GameState = {
-  credits: 10000,
+  credits: 100000,
   employees: 10,
   homeCountryCode: "DE",
   activeCountryCode: "DE",

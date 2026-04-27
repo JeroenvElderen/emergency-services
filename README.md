@@ -101,7 +101,7 @@ Each entry maps one in-game vehicle type and can override default values:
   "id": "ENGINE",
   "label": "Engine",
   "station_type": "FIRE",
-  "cost": 75000,
+  "cost": 5000,
   "speed_kmh": 55,
   "crew": 4,
   "enabled": true
