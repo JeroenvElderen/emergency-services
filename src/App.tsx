@@ -7,17 +7,14 @@ import {
   Ambulance,
   Building2,
   CarFront,
-  Clock3,
   Coins,
   Flame,
   Globe2,
   House,
-  Radio,
   Shield,
   Siren,
   Truck,
   UserPlus,
-  Users,
   X,
 } from "lucide-react";
 
@@ -979,14 +976,6 @@ export default function Page() {
     return progress;
   }, []);
   const hasStarted = game.stations.length > 0;
-  const activeVehicleCount = game.vehicles.filter(
-    (vehicle) =>
-      vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING",
-  ).length;
-
-  const completedIncidents = game.incidents.filter(
-    (incident) => incident.status === "COMPLETE",
-  );
   const staffedEmployees = game.vehicles.reduce(
     (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
     0,
@@ -2454,81 +2443,63 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute left-3 top-3 z-30 w-[300px] space-y-3 rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-950/95 to-slate-900/85 p-3 shadow-2xl backdrop-blur-sm">
-        <div className="flex items-start justify-between">
-          <div>
-            <p className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-300">
-              <Radio className="h-3 w-3" />
-              Dispatch Console
-            </p>
-            <h1 className="text-base font-black tracking-tight">
-              Emergency Services
-            </h1>
-          </div>
-          <div className="flex gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2"
-              onClick={() => {
-                setCountryPickerMode("manage");
-                setCountryPickerOpen(true);
-                setBuildPickerOpen(false);
-                setIsSelectingRealStation(false);
-              }}
-              title="Manage countries"
-            >
-              <Globe2 className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={() => {
-                setBuildPickerOpen((open) => !open);
-                setIsSelectingRealStation(false);
-              }}
-              title="Buy building"
-            >
-              +
-            </Button>
+      <div className="absolute left-3 top-3 z-30 flex max-w-[min(92vw,720px)] items-center gap-2 rounded-xl border border-slate-700/70 bg-slate-950/88 px-2.5 py-2 shadow-2xl backdrop-blur-sm">
+        <div className="relative">
+          <Badge tone="good">
+            <Coins className="mr-1 h-3 w-3" />
+            Cash {game.credits}
+          </Badge>
+          <div className="pointer-events-none absolute -right-4 bottom-8 flex flex-col items-end gap-1">
+            {incomeToasts.map((toast) => (
+              <div key={toast.id} className="income-toast rounded-md bg-emerald-500/95 px-2 py-1 text-xs font-bold text-emerald-950 shadow">
+                +{toast.amount}
+              </div>
+            ))}
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-1.5">
-         <div className="relative">
-            <Badge tone="good">
-              <Coins className="mr-1 h-3 w-3" />
-              {game.credits}
-            </Badge>
-            <div className="pointer-events-none absolute -right-4 bottom-8 flex flex-col items-end gap-1">
-              {incomeToasts.map((toast) => (
-                <div key={toast.id} className="income-toast rounded-md bg-emerald-500/95 px-2 py-1 text-xs font-bold text-emerald-950 shadow">
-                  +{toast.amount}
-                </div>
-              ))}
-            </div>
-          </div>
-          <Badge tone="blue">
-            <Users className="mr-1 h-3 w-3" />
-            {game.employees} staff
-          </Badge>
-          <Badge tone="default">
-            <Clock3 className="mr-1 h-3 w-3" />
-            per mission payroll
-          </Badge>
-          <Badge>{activeCountry.name}</Badge>
-          <Badge tone="blue">
-            <Radio className="mr-1 h-3 w-3" />
-            {activeIncidents.length} open
-          </Badge>
-          <Badge>{completedIncidents.length} closed</Badge>
-          <Badge>{activeVehicleCount} active</Badge>
-          <Badge tone="blue">{weatherState.label}</Badge>
-          <Badge>{trafficState.label}</Badge>
-          <Badge tone="good">Rep {game.reputation}</Badge>
-        </div>
+        <Badge tone="blue">Weather {weatherState.label}</Badge>
+        <Badge>Traffic {trafficState.label}</Badge>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2"
+          onClick={() => {
+            setCountryPickerMode("manage");
+            setCountryPickerOpen(true);
+            setBuildPickerOpen(false);
+            setIsSelectingRealStation(false);
+          }}
+          title="Manage countries"
+        >
+          <Globe2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          className="h-7 w-7 p-0"
+          onClick={() => {
+            setBuildPickerOpen((open) => !open);
+            setIsSelectingRealStation(false);
+          }}
+          title="Buy building"
+        >
+          +
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => hireEmployee(1)}
+          disabled={game.credits < HIRING_COST}
+          title={`Hire 1 employee for ${HIRING_COST}`}
+        >
+          <UserPlus className="mr-1 h-3.5 w-3.5" />
+          Hire
+        </Button>
+        <Button size="sm" variant="outline" onClick={resetGame}>
+          Reset
+        </Button>
 
         {buildPickerOpen && (
-          <div className="rounded-xl border border-slate-700 bg-slate-900/80 p-2">
+          <div className="absolute left-0 top-[calc(100%+0.5rem)] w-[280px] rounded-xl border border-slate-700 bg-slate-900/90 p-2">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
               Buy building
             </p>
@@ -2574,22 +2545,6 @@ export default function Page() {
             </p>
           </div>
         )}
-
-        <div className="flex gap-1.5">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => hireEmployee(1)}
-            disabled={game.credits < HIRING_COST}
-            title={`Hire 1 employee for ${HIRING_COST}`}
-          >
-            <UserPlus className="mr-1 h-3.5 w-3.5" />
-            Hire
-          </Button>
-          <Button size="sm" variant="outline" onClick={resetGame}>
-            Reset
-          </Button>
-        </div>
       </div>
 
       {selectedStation && (
