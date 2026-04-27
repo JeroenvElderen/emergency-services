@@ -97,6 +97,8 @@ type MissionDefinition = {
   spawn_limit_per_day?: number;
   unique_active?: boolean;
   average_credits: number;
+  reward_floor?: number;
+  reward_ceiling?: number;
   requirements: Partial<Record<string, number>>;
   prerequisites?: Partial<Record<string, number>>;
   stages?: MissionStageDefinition[];
@@ -128,6 +130,8 @@ type SpawnableMission = {
   title: string;
   category: IncidentCategory;
   baseReward: number;
+  rewardFloor?: number;
+  rewardCeiling?: number;
   stages: IncidentStage[];
   fixedLocation?: {
     lat: number;
@@ -424,9 +428,47 @@ function missionToTemplate(
     title: mission.name,
     category,
     baseReward: mission.average_credits,
+    rewardFloor: mission.reward_floor,
+    rewardCeiling: mission.reward_ceiling,
     stages,
     fixedLocation: mission.fixed_location,
   };
+}
+
+function calculateIncidentReward(
+  template: SpawnableMission,
+  difficulty: number,
+  reputation: number,
+) {
+  const requiredVehicles = template.stages.reduce(
+    (sum, stage) => sum + stage.required.length,
+    0,
+  );
+  const complexityMultiplier =
+    1 +
+    Math.max(requiredVehicles - 1, 0) * 0.18 +
+    Math.max(template.stages.length - 1, 0) * 0.12;
+  const difficultyMultiplier = 1 + Math.max(difficulty - 1, 0) * 0.08;
+  const reputationMultiplier = 0.92 + reputation / 500;
+  const randomMultiplier = 0.9 + Math.random() * 0.2;
+
+  const rawReward =
+    template.baseReward *
+    complexityMultiplier *
+    difficultyMultiplier *
+    reputationMultiplier *
+    randomMultiplier;
+
+  const minReward = Math.max(
+    25,
+    Math.round(template.rewardFloor ?? template.baseReward * 0.65),
+  );
+  const maxReward = Math.max(
+    minReward,
+    Math.round(template.rewardCeiling ?? template.baseReward * 2.2),
+  );
+
+  return Math.round(Math.min(maxReward, Math.max(minReward, rawReward)));
 }
 
 function getCurrentDayKey() {
@@ -1467,6 +1509,65 @@ export default function Page() {
     });
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
+  const updateVehicleRouteLine = useCallback(
+    (vehicle: Vehicle, remainingRoute: [number, number][]) => {
+      const map = mapRef.current;
+      if (!map || !map.isStyleLoaded()) return;
+
+      const routeId = `vehicle-route-${vehicle.id}`;
+
+      if (remainingRoute.length < 2) {
+        if (map.getLayer(routeId)) map.removeLayer(routeId);
+        if (map.getSource(routeId)) map.removeSource(routeId);
+        routeLayerIdsRef.current = routeLayerIdsRef.current.filter(
+          (id) => id !== routeId,
+        );
+        return;
+      }
+
+      const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
+        type: "Feature",
+        geometry: {
+          type: "LineString",
+          coordinates: remainingRoute,
+        },
+        properties: {},
+      };
+
+      const source = map.getSource(routeId) as mapboxgl.GeoJSONSource | undefined;
+
+      if (source) {
+        source.setData(routeData);
+      } else {
+        map.addSource(routeId, {
+          type: "geojson",
+          data: routeData,
+        });
+      }
+
+      if (!map.getLayer(routeId)) {
+        map.addLayer({
+          id: routeId,
+          type: "line",
+          source: routeId,
+          paint: {
+            "line-color": getVehicleRouteColor(vehicle.id),
+            "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
+            "line-opacity": 0.8,
+            ...(vehicle.status === "RETURNING"
+              ? { "line-dasharray": [1.4, 1.2] }
+              : {}),
+          },
+        });
+      }
+
+      if (!routeLayerIdsRef.current.includes(routeId)) {
+        routeLayerIdsRef.current.push(routeId);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!mapRef.current) return;
 
@@ -1538,9 +1639,13 @@ export default function Page() {
     });
 
     activeIncidents.forEach((incident) => {
-      const el = document.createElement("button");
       const phase = getIncidentMarkerPhase(incident, game.vehicles);
       const markerStyle = INCIDENT_MARKER_PHASE_STYLES[phase];
+      if (phase === "RETURNING" || phase === "FILING") {
+        return;
+      }
+
+      const el = document.createElement("button");
       el.className =
         "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 text-white shadow-lg";
       el.style.backgroundColor = markerStyle.background;
@@ -1564,7 +1669,8 @@ export default function Page() {
 
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
-        (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+        ((vehicle.status === "DISPATCHED" && vehicle.eta > 0) ||
+          vehicle.status === "RETURNING") &&
         vehicle.incidentId !== null;
 
       if (!shouldRenderVehicle) {
@@ -1588,60 +1694,7 @@ export default function Page() {
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
-      const routeToRender = remainingRoute.length >= 2 ? remainingRoute : [];
-      const routeId = `vehicle-route-${vehicle.id}`;
-
-      if (shouldRenderVehicle && routeToRender.length >= 2) {
-        const updateOrCreateRouteLayer = () => {
-          if (!mapRef.current) return;
-
-          const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
-            type: "Feature",
-            geometry: {
-              type: "LineString",
-              coordinates: routeToRender,
-            },
-            properties: {},
-          };
-
-          const existingSource = mapRef.current.getSource(routeId);
-          if (existingSource) {
-            (existingSource as mapboxgl.GeoJSONSource).setData(routeData);
-            return;
-          }
-
-          mapRef.current.addSource(routeId, {
-            type: "geojson",
-            data: routeData,
-          });
-
-          if (!routeLayerIdsRef.current.includes(routeId)) {
-            routeLayerIdsRef.current.push(routeId);
-          }
-
-          mapRef.current.addLayer({
-            id: routeId,
-            type: "line",
-            source: routeId,
-            paint: {
-              "line-color": getVehicleRouteColor(vehicle.id),
-              "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
-              "line-opacity": 0.8,
-              ...(vehicle.status === "RETURNING"
-                ? { "line-dasharray": [1.4, 1.2] }
-                : {}),
-            },
-          });
-        };
-
-        if (mapRef.current?.isStyleLoaded()) {
-          updateOrCreateRouteLayer();
-        } else {
-          mapRef.current?.once("load", updateOrCreateRouteLayer);
-        }
-      } else {
-        removeVehicleRoute(vehicle.id);
-      }
+      updateVehicleRouteLine(vehicle, remainingRoute);
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {
@@ -1715,6 +1768,7 @@ export default function Page() {
     isSelectingRealStation,
     realStations,
     selectedBuild,
+    updateVehicleRouteLine,
   ]);
 
   useEffect(() => {
@@ -1737,7 +1791,14 @@ export default function Page() {
           const progress = getSmoothedProgress(vehicle);
           const fallback = vehicle.status === "DISPATCHED" ? station : incident;
           const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
+          const remainingRoute = getRemainingRoute(
+            vehicle.route,
+            progress,
+            fallback,
+          );
+
           marker.setLngLat([lng, lat]);
+          updateVehicleRouteLine(vehicle, remainingRoute);
         });
       }
 
@@ -1746,7 +1807,13 @@ export default function Page() {
 
     frameId = window.requestAnimationFrame(animateVehicles);
     return () => window.cancelAnimationFrame(frameId);
-  }, [game.incidents, game.stations, game.vehicles, getSmoothedProgress]);
+  }, [
+    game.incidents,
+    game.stations,
+    game.vehicles,
+    getSmoothedProgress,
+    updateVehicleRouteLine,
+  ]);
 
   const chooseIncidentTemplates = useCallback(
     (state: GameState) => {
@@ -2149,8 +2216,9 @@ export default function Page() {
                 (sum, station) => sum + station.upgrades.trainingWing,
                 0,
               );
-              const qualityMultiplier = 0.8 + current.reputation / 100;
-              const trainingMultiplier = 1 + trainingBonus * 0.01;
+              const qualityMultiplier = 0.92 + current.reputation / 500;
+              const trainingMultiplier =
+                1 + Math.min(trainingBonus, 30) * 0.004;
               const payout = Math.round(
                 nextIncident.reward * qualityMultiplier * trainingMultiplier,
               );
@@ -2242,13 +2310,10 @@ export default function Page() {
               title: template.title,
               category: template.category,
               severity: difficulty,
-              reward: Math.max(
-                650,
-                Math.round(
-                  template.baseReward *
-                    (1.3 + (difficulty - 1) * 0.14) *
-                    (0.86 + (100 - current.reputation) / 240),
-                ),
+              reward: calculateIncidentReward(
+                template,
+                difficulty,
+                current.reputation,
               ),
               lat,
               lng,

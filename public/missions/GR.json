@@ -18,5 +18,45 @@
       "lat": 37.97165171169059, 
       "lng": 23.725760773267712
     }
+  },
+  {
+    "id": "2",
+    "name": "Nafplio Town Hall - Small fire",
+    "average_credits": 800,
+    "requirements": {
+      "firetrucks": 2
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "fixed_location": {
+      "lat": 37.565690011677496, 
+      "lng": 22.800038000789396
+    }
+  },
+  {
+    "id": "3",
+    "name": "Palamidi Fortress - Child stuck in between bars",
+    "average_credits": 1200,
+    "requirements": {
+      "firetrucks": 2
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "fixed_location": {
+      "lat": 37.56214585466694, 
+      "lng": 22.803793235337984
+    }
   }
 ]

@@ -2,7 +2,7 @@
   {
     "id": "1",
     "name": "Bus Stop Waste Bin Fire",
-    "average_credits": 480,
+    "average_credits": 100,
     "requirements": {
       "firetrucks": 1
     },
@@ -13,12 +13,14 @@
     "mission_categories": [
       "fire",
       "urban"
-    ]
+    ],
+    "reward_floor": 336,
+    "reward_ceiling": 840
   },
   {
     "id": "2",
     "name": "Container fire",
-    "average_credits": 480,
+    "average_credits": 100,
     "requirements": {
       "firetrucks": 1
     },
@@ -29,12 +31,14 @@
     "mission_categories": [
       "fire",
       "urban"
-    ]
+    ],
+    "reward_floor": 336,
+    "reward_ceiling": 840
   },
   {
     "id": "3",
     "name": "Person stuck in car",
-    "average_credits": 520,
+    "average_credits": 120,
     "requirements": {
       "firetrucks": 1
     },
@@ -45,6 +49,8 @@
     "mission_categories": [
       "fire",
       "urban"
-    ]
+    ],
+    "reward_floor": 364,
+    "reward_ceiling": 910
   }
 ]
