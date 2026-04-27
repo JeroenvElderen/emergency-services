@@ -35,6 +35,7 @@ type Station = {
   name: string;
   type: StationType;
   level: number;
+  budget: number;
   upgrades: {
     bayCapacity: number;
     trainingWing: number;
@@ -62,6 +63,8 @@ type Vehicle = {
   totalEta: number;
   incidentId: number | null;
   route: [number, number][];
+  fuel: number;
+  maxFuel: number;
 };
 
 type IncidentStage = {
@@ -84,10 +87,48 @@ type Incident = {
   currentStage: number;
   stages: IncidentStage[];
   assignedVehicleIds: number[];
+  aiAssignedUnits: {
+    id: number;
+    type: VehicleType;
+    eta: number;
+    arrived: boolean;
+  }[];
   stageWorkRemaining: number;
   stageWorkTotal: number;
   filingRemaining: number;
   filingTotal: number;
+};
+
+type WeatherCell = {
+  id: number;
+  weather: GameState["weather"];
+  center: [number, number];
+  radiusKm: number;
+  timer: number;
+};
+
+type CivilianZone = {
+  id: number;
+  type: "TRAFFIC" | "CROWD" | "BLOCKED";
+  center: [number, number];
+  radiusKm: number;
+  severity: number;
+  timer: number;
+};
+
+type AiStation = {
+  id: number;
+  name: string;
+  type: StationType;
+  lat: number;
+  lng: number;
+  vehicles: {
+    id: number;
+    type: VehicleType;
+    available: boolean;
+    eta: number;
+    incidentId: number | null;
+  }[];
 };
 
 type MissionDefinition = {
@@ -167,6 +208,13 @@ type GameState = {
   weather: "CLEAR" | "RAIN" | "SNOW" | "HEAT";
   weatherTimer: number;
   missionDailySpawns: Record<string, string>;
+  weatherCells: WeatherCell[];
+  civilianZones: CivilianZone[];
+  aiStations: AiStation[];
+  market: {
+    vehicleMultiplier: Record<VehicleType, number>;
+    upgradeMultiplier: number;
+  };
 };
 
 type IncomeToast = {
@@ -184,6 +232,8 @@ const COUNTRY_LICENSE_COST = 100000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const WEATHER_INTERVAL_SECONDS = 75;
+const WEATHER_CELL_INTERVAL_SECONDS = 45;
+const CIVILIAN_ZONE_INTERVAL_SECONDS = 35;
 const WEATHER_EFFECTS: Record<
   GameState["weather"],
   { speedMultiplier: number; incidentMultiplier: number; label: string }
@@ -192,6 +242,22 @@ const WEATHER_EFFECTS: Record<
   RAIN: { speedMultiplier: 0.84, incidentMultiplier: 1.18, label: "Rain" },
   SNOW: { speedMultiplier: 0.72, incidentMultiplier: 1.24, label: "Snow" },
   HEAT: { speedMultiplier: 0.9, incidentMultiplier: 1.12, label: "Heat" },
+};
+const CIVILIAN_ZONE_EFFECTS: Record<
+  CivilianZone["type"],
+  { speedMultiplier: number; spawnMultiplier: number; label: string }
+> = {
+  TRAFFIC: { speedMultiplier: 0.72, spawnMultiplier: 1.1, label: "Traffic jam" },
+  CROWD: { speedMultiplier: 0.82, spawnMultiplier: 1.14, label: "Crowd panic" },
+  BLOCKED: { speedMultiplier: 0.6, spawnMultiplier: 1.05, label: "Blocked road" },
+};
+const VEHICLE_FUEL_PROFILE: Record<VehicleType, { maxFuel: number; litersPerKm: number }> = {
+  ENGINE: { maxFuel: 240, litersPerKm: 0.85 },
+  LADDER: { maxFuel: 260, litersPerKm: 1 },
+  AMBULANCE: { maxFuel: 140, litersPerKm: 0.45 },
+  RESCUE: { maxFuel: 160, litersPerKm: 0.55 },
+  PATROL: { maxFuel: 85, litersPerKm: 0.2 },
+  SWAT: { maxFuel: 130, litersPerKm: 0.42 },
 };
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
@@ -325,6 +391,20 @@ const initialState: GameState = {
   weather: "CLEAR",
   weatherTimer: WEATHER_INTERVAL_SECONDS,
   missionDailySpawns: {},
+  weatherCells: generateLocalizedWeatherCells("DE"),
+  civilianZones: generateCivilianZones("DE"),
+  aiStations: createAiStations("DE"),
+  market: {
+    vehicleMultiplier: {
+      ENGINE: 1,
+      LADDER: 1,
+      AMBULANCE: 1,
+      RESCUE: 1,
+      PATROL: 1,
+      SWAT: 1,
+    },
+    upgradeMultiplier: 1,
+  },
 };
 
 const rand = (min: number, max: number) =>
@@ -369,6 +449,104 @@ function haversineKm(
     Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
 
   return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function fuelCapacityFor(type: VehicleType) {
+  return VEHICLE_FUEL_PROFILE[type].maxFuel;
+}
+
+function fuelNeededForTrip(type: VehicleType, km: number) {
+  return VEHICLE_FUEL_PROFILE[type].litersPerKm * km;
+}
+
+function pointInRadiusKm(point: [number, number], center: [number, number], radiusKm: number) {
+  return (
+    haversineKm(
+      { lat: point[1], lng: point[0] },
+      { lat: center[1], lng: center[0] },
+    ) <= radiusKm
+  );
+}
+
+function weatherAtLocation(state: GameState, lat: number, lng: number) {
+  const match = state.weatherCells.find((cell) =>
+    pointInRadiusKm([lng, lat], cell.center, cell.radiusKm),
+  );
+  return match?.weather ?? state.weather;
+}
+
+function civilianEffectAtLocation(state: GameState, lat: number, lng: number) {
+  const zones = state.civilianZones.filter((zone) =>
+    pointInRadiusKm([lng, lat], zone.center, zone.radiusKm),
+  );
+  return zones.reduce(
+    (acc, zone) => {
+      const effect = CIVILIAN_ZONE_EFFECTS[zone.type];
+      return {
+        speedMultiplier: acc.speedMultiplier * effect.speedMultiplier,
+        spawnMultiplier: acc.spawnMultiplier * effect.spawnMultiplier,
+        labels: [...acc.labels, effect.label],
+      };
+    },
+    { speedMultiplier: 1, spawnMultiplier: 1, labels: [] as string[] },
+  );
+}
+
+function generateLocalizedWeatherCells(countryCode: string): WeatherCell[] {
+  const country = findCountry(countryCode);
+  const weatherPool: GameState["weather"][] = ["CLEAR", "RAIN", "SNOW", "HEAT"];
+  const count = rand(2, 4);
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    weather: weatherPool[rand(0, weatherPool.length - 1)],
+    center: [
+      country.bounds.minLng + Math.random() * (country.bounds.maxLng - country.bounds.minLng),
+      country.bounds.minLat + Math.random() * (country.bounds.maxLat - country.bounds.minLat),
+    ],
+    radiusKm: rand(25, 90),
+    timer: WEATHER_CELL_INTERVAL_SECONDS,
+  }));
+}
+
+function generateCivilianZones(countryCode: string): CivilianZone[] {
+  const country = findCountry(countryCode);
+  const types: CivilianZone["type"][] = ["TRAFFIC", "CROWD", "BLOCKED"];
+  const count = rand(2, 5);
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    type: types[rand(0, types.length - 1)],
+    center: [
+      country.bounds.minLng + Math.random() * (country.bounds.maxLng - country.bounds.minLng),
+      country.bounds.minLat + Math.random() * (country.bounds.maxLat - country.bounds.minLat),
+    ],
+    radiusKm: rand(4, 16),
+    severity: rand(1, 3),
+    timer: CIVILIAN_ZONE_INTERVAL_SECONDS,
+  }));
+}
+
+function createAiStations(countryCode: string): AiStation[] {
+  const country = findCountry(countryCode);
+  const stationTypes: StationType[] = ["FIRE", "EMS", "POLICE"];
+  return stationTypes.map((type, index) => {
+    const vehiclePool: VehicleType[] =
+      type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
+    const vehicles = Array.from({ length: 4 }, (_, vi) => ({
+      id: index * 100 + vi + 1,
+      type: vehiclePool[vi % vehiclePool.length],
+      available: true,
+      eta: 0,
+      incidentId: null,
+    }));
+    return {
+      id: index + 1,
+      name: `AI ${STATION_TYPES[type].label} HQ`,
+      type,
+      lat: country.center[1] + (Math.random() - 0.5) * 0.8,
+      lng: country.center[0] + (Math.random() - 0.5) * 0.8,
+      vehicles,
+    };
+  });
 }
 
 function stationCapacity(station: Pick<Station, "level" | "upgrades">) {
@@ -565,6 +743,20 @@ function loadGame(): GameState {
       weather: parsed.weather ?? "CLEAR",
       weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
       missionDailySpawns: parsed.missionDailySpawns ?? {},
+      weatherCells: parsed.weatherCells ?? generateLocalizedWeatherCells(activeCountryCode),
+      civilianZones: parsed.civilianZones ?? generateCivilianZones(activeCountryCode),
+      aiStations: parsed.aiStations ?? createAiStations(activeCountryCode),
+      market: parsed.market ?? {
+        vehicleMultiplier: {
+          ENGINE: 1,
+          LADDER: 1,
+          AMBULANCE: 1,
+          RESCUE: 1,
+          PATROL: 1,
+          SWAT: 1,
+        },
+        upgradeMultiplier: 1,
+      },
       homeCountryCode,
       activeCountryCode,
       unlockedCountryCodes: unlockedCountryCodes.includes(homeCountryCode)
@@ -572,6 +764,7 @@ function loadGame(): GameState {
         : [homeCountryCode, ...unlockedCountryCodes],
       stations: parsed.stations.map((station) => ({
         ...station,
+        budget: station.budget ?? 50000,
         upgrades: station.upgrades ?? {
           bayCapacity: Math.max(station.level - 1, 0),
           trainingWing: 0,
@@ -583,6 +776,7 @@ function loadGame(): GameState {
         missionId: incident.missionId,
         missionKey: incident.missionKey,
         isSpecialMission: incident.isSpecialMission ?? false,
+        aiAssignedUnits: incident.aiAssignedUnits ?? [],
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
         stageWorkTotal: incident.stageWorkTotal ?? STAGE_WORK_SECONDS,
         filingRemaining: incident.filingRemaining ?? FILING_SECONDS,
@@ -591,6 +785,8 @@ function loadGame(): GameState {
       vehicles: parsed.vehicles.map((vehicle) => ({
         ...vehicle,
         route: Array.isArray(vehicle.route) ? vehicle.route : [],
+        maxFuel: vehicle.maxFuel ?? fuelCapacityFor(vehicle.type),
+        fuel: vehicle.fuel ?? fuelCapacityFor(vehicle.type),
       })),
     };
   } catch {
@@ -777,11 +973,15 @@ export default function Page() {
     IncidentNotification[]
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
+  const [showCoverageHeatmap, setShowCoverageHeatmap] = useState(true);
+  const [showWeatherCells, setShowWeatherCells] = useState(true);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
+  const aiStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
+  const civilianMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const vehicleProgressFloorRef = useRef<
     Map<
@@ -1052,6 +1252,10 @@ export default function Page() {
         },
         {} as Partial<Record<VehicleType, number>>,
       );
+      incident.aiAssignedUnits.forEach((unit) => {
+        if (!unit.arrived) return;
+        arrivedCounts[unit.type] = (arrivedCounts[unit.type] ?? 0) + 1;
+      });
       const atScene =
         !!currentStage &&
         Object.entries(requiredCounts).every(
@@ -1139,6 +1343,7 @@ export default function Page() {
           name: `${label} Station ${id}`,
           type,
           level: 1,
+          budget: 50000,
           upgrades: {
             bayCapacity: 0,
             trainingWing: 0,
@@ -1164,6 +1369,8 @@ export default function Page() {
               totalEta: 0,
               incidentId: null,
               route: [],
+              fuel: fuelCapacityFor(starterType),
+              maxFuel: fuelCapacityFor(starterType),
             },
             {
               id: nextVehicleId + 1,
@@ -1175,6 +1382,8 @@ export default function Page() {
               totalEta: 0,
               incidentId: null,
               route: [],
+              fuel: fuelCapacityFor(starterType),
+              maxFuel: fuelCapacityFor(starterType),
             },
           ];
           nextVehicleId += 2;
@@ -1204,6 +1413,9 @@ export default function Page() {
       setGame((current) => ({
         ...current,
         activeCountryCode: countryCode,
+        weatherCells: generateLocalizedWeatherCells(countryCode),
+        civilianZones: generateCivilianZones(countryCode),
+        aiStations: current.aiStations.length > 0 ? current.aiStations : createAiStations(countryCode),
         homeCountryCode:
           current.stations.length === 0 ? countryCode : current.homeCountryCode,
         unlockedCountryCodes: current.unlockedCountryCodes.includes(countryCode)
@@ -1334,10 +1546,14 @@ export default function Page() {
       stationMarkerRefs.current.forEach((marker) => marker.remove());
       incidentMarkerRefs.current.forEach((marker) => marker.remove());
       realStationMarkerRefs.current.forEach((marker) => marker.remove());
+      aiStationMarkerRefs.current.forEach((marker) => marker.remove());
+      civilianMarkerRefs.current.forEach((marker) => marker.remove());
       vehicleMarkerRefs.current.forEach((marker) => marker.remove());
       stationMarkerRefs.current = [];
       incidentMarkerRefs.current = [];
       realStationMarkerRefs.current = [];
+      aiStationMarkerRefs.current = [];
+      civilianMarkerRefs.current = [];
       vehicleMarkerRefs.current.clear();
       mapRef.current?.remove();
       mapRef.current = null;
@@ -1347,6 +1563,117 @@ export default function Page() {
   useEffect(() => {
     flyToCountry(game.activeCountryCode);
   }, [flyToCountry, game.activeCountryCode]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) return;
+
+    const coverageSourceId = "coverage-heatmap-source";
+    const coverageLayerId = "coverage-heatmap-layer";
+    const weatherSourceId = "weather-cells-source";
+    const weatherLayerId = "weather-cells-layer";
+
+    if (map.getLayer(coverageLayerId)) map.removeLayer(coverageLayerId);
+    if (map.getSource(coverageSourceId)) map.removeSource(coverageSourceId);
+    if (map.getLayer(weatherLayerId)) map.removeLayer(weatherLayerId);
+    if (map.getSource(weatherSourceId)) map.removeSource(weatherSourceId);
+
+    if (showCoverageHeatmap) {
+      map.addSource(coverageSourceId, {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: game.stations.map((station) => ({
+            type: "Feature",
+            properties: {
+              intensity: 0.35 + station.level * 0.22 + station.upgrades.dispatchCenter * 0.1,
+              radius: 12000 + station.level * 3000 + station.upgrades.dispatchCenter * 2500,
+            },
+            geometry: {
+              type: "Point",
+              coordinates: [station.lng, station.lat],
+            },
+          })),
+        },
+      });
+
+      map.addLayer({
+        id: coverageLayerId,
+        type: "heatmap",
+        source: coverageSourceId,
+        paint: {
+          "heatmap-weight": ["get", "intensity"],
+          "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 4, 14, 8, 28, 12, 50],
+          "heatmap-opacity": 0.35,
+          "heatmap-color": [
+            "interpolate",
+            ["linear"],
+            ["heatmap-density"],
+            0,
+            "rgba(56,189,248,0)",
+            0.25,
+            "rgba(56,189,248,0.25)",
+            0.5,
+            "rgba(14,165,233,0.45)",
+            0.75,
+            "rgba(34,197,94,0.65)",
+            1,
+            "rgba(250,204,21,0.82)",
+          ],
+        },
+      });
+    }
+
+    if (showWeatherCells) {
+      map.addSource(weatherSourceId, {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features: game.weatherCells.map((cell) => ({
+            type: "Feature",
+            properties: {
+              weather: cell.weather,
+              radius: cell.radiusKm * 1000,
+            },
+            geometry: {
+              type: "Point",
+              coordinates: cell.center,
+            },
+          })),
+        },
+      });
+      map.addLayer({
+        id: weatherLayerId,
+        type: "circle",
+        source: weatherSourceId,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 12, 8, 28, 12, 60],
+          "circle-opacity": 0.15,
+          "circle-color": [
+            "match",
+            ["get", "weather"],
+            "RAIN",
+            "#38bdf8",
+            "SNOW",
+            "#cbd5e1",
+            "HEAT",
+            "#f97316",
+            "#22c55e",
+          ],
+          "circle-stroke-width": 1.1,
+          "circle-stroke-color": "rgba(248,250,252,0.45)",
+        },
+      });
+    }
+
+    return () => {
+      if (!mapRef.current) return;
+      if (mapRef.current.getLayer(coverageLayerId)) mapRef.current.removeLayer(coverageLayerId);
+      if (mapRef.current.getSource(coverageSourceId)) mapRef.current.removeSource(coverageSourceId);
+      if (mapRef.current.getLayer(weatherLayerId)) mapRef.current.removeLayer(weatherLayerId);
+      if (mapRef.current.getSource(weatherSourceId)) mapRef.current.removeSource(weatherSourceId);
+    };
+  }, [game.stations, game.weatherCells, showCoverageHeatmap, showWeatherCells]);
 
   useEffect(() => {
     if (!isSelectingRealStation) return;
@@ -1423,8 +1750,12 @@ export default function Page() {
 
           const station = current.stations.find((s) => s.id === vehicle.stationId);
           if (!station) return vehicle;
+          const incident = current.incidents.find((item) => item.id === update.incidentId);
+          if (!incident) return vehicle;
+          const midpoint = { lat: (station.lat + incident.lat) / 2, lng: (station.lng + incident.lng) / 2 };
           const weatherMultiplier =
-            WEATHER_EFFECTS[current.weather].speedMultiplier;
+            WEATHER_EFFECTS[weatherAtLocation(current, midpoint.lat, midpoint.lng)].speedMultiplier;
+          const civilianEffect = civilianEffectAtLocation(current, midpoint.lat, midpoint.lng);
           const traffic = getRushHourModifier();
           const dispatchUpgrade =
             1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
@@ -1435,6 +1766,7 @@ export default function Page() {
                 (VEHICLE_TYPES[vehicle.type].speedKmh *
                   weatherMultiplier *
                   traffic.trafficMultiplier *
+                  civilianEffect.speedMultiplier *
                   dispatchUpgrade)) *
                 3600,
             ),
@@ -1470,9 +1802,13 @@ export default function Page() {
     stationMarkerRefs.current.forEach((marker) => marker.remove());
     incidentMarkerRefs.current.forEach((marker) => marker.remove());
     realStationMarkerRefs.current.forEach((marker) => marker.remove());
+    aiStationMarkerRefs.current.forEach((marker) => marker.remove());
+    civilianMarkerRefs.current.forEach((marker) => marker.remove());
     stationMarkerRefs.current = [];
     incidentMarkerRefs.current = [];
     realStationMarkerRefs.current = [];
+    aiStationMarkerRefs.current = [];
+    civilianMarkerRefs.current = [];
 
     game.stations.forEach((station) => {
       const el = document.createElement("div");
@@ -1626,15 +1962,43 @@ export default function Page() {
         );
       });
     }
+
+    game.aiStations.forEach((station) => {
+      const el = document.createElement("div");
+      el.className = "flex h-8 w-8 items-center justify-center rounded-full border-2 border-indigo-200 bg-indigo-600/95 text-sm text-white shadow-lg";
+      el.title = `${station.name} (AI)`;
+      el.innerHTML = "🤖";
+      aiStationMarkerRefs.current.push(
+        new mapboxgl.Marker({ element: el, anchor: "center" })
+          .setLngLat([station.lng, station.lat])
+          .addTo(mapRef.current!),
+      );
+    });
+
+    game.civilianZones.forEach((zone) => {
+      const el = document.createElement("div");
+      el.className = "flex h-6 w-6 items-center justify-center rounded-full border border-amber-300 bg-amber-600/90 text-[10px] text-white";
+      el.title = `${CIVILIAN_ZONE_EFFECTS[zone.type].label} (${zone.timer}s)`;
+      el.textContent = zone.type === "BLOCKED" ? "⛔" : zone.type === "CROWD" ? "👥" : "🚗";
+      civilianMarkerRefs.current.push(
+        new mapboxgl.Marker({ element: el, anchor: "center" })
+          .setLngLat(zone.center)
+          .addTo(mapRef.current!),
+      );
+    });
   }, [
     activeIncidents,
     buildStationAt,
+    game.aiStations,
+    game.civilianZones,
     game.incidents,
     game.stations,
     game.vehicles,
     getSmoothedProgress,
     isSelectingRealStation,
     realStations,
+    showCoverageHeatmap,
+    showWeatherCells,
     selectedBuild,
   ]);
 
@@ -1738,7 +2102,13 @@ export default function Page() {
 
     const route = await fetchRoadRoute(station, incident, mapToken);
     const km = route?.distanceKm ?? haversineKm(station, incident);
-    const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
+    const midpoint = {
+      lat: (station.lat + incident.lat) / 2,
+      lng: (station.lng + incident.lng) / 2,
+    };
+    const localWeather = weatherAtLocation(game, midpoint.lat, midpoint.lng);
+    const weatherMultiplier = WEATHER_EFFECTS[localWeather].speedMultiplier;
+    const civilianEffect = civilianEffectAtLocation(game, midpoint.lat, midpoint.lng);
     const traffic = getRushHourModifier();
     const dispatchUpgrade =
       1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
@@ -1746,8 +2116,10 @@ export default function Page() {
       VEHICLE_TYPES[vehicle.type].speedKmh *
       weatherMultiplier *
       traffic.trafficMultiplier *
+      civilianEffect.speedMultiplier *
       dispatchUpgrade;
     const eta = Math.max(8, Math.round((km / speed) * 3600));
+    const fuelNeeded = fuelNeededForTrip(vehicle.type, km);
 
     const roadStart = nudgePointToward(station, incident);
     const roadRoute = route
@@ -1762,7 +2134,8 @@ export default function Page() {
         !incident ||
         vehicle.status !== "AVAILABLE" ||
         current.credits < DISPATCH_COST ||
-        incident.assignedVehicleIds.includes(vehicleId)
+        incident.assignedVehicleIds.includes(vehicleId) ||
+        vehicle.fuel < fuelNeeded
       ) {
         return current;
       }
@@ -1781,6 +2154,7 @@ export default function Page() {
                 eta,
                 totalEta: eta,
                 incidentId,
+                fuel: Math.max(0, v.fuel - fuelNeeded),
                 route:
                   roadRoute && roadRoute.length >= 2
                     ? roadRoute
@@ -1801,7 +2175,7 @@ export default function Page() {
             : i,
         ),
         log: [
-          `Dispatched ${vehicle.name} to ${incident.title}. ETA ${eta}s (${km.toFixed(1)} km${route ? ", routed" : ", direct"}).`,
+          `Dispatched ${vehicle.name} to ${incident.title}. ETA ${eta}s (${km.toFixed(1)} km, fuel -${fuelNeeded.toFixed(1)}L${civilianEffect.labels.length > 0 ? `, ${civilianEffect.labels.join("/")}` : ""}).`,
           ...current.log,
         ].slice(0, 10),
       };
@@ -1821,15 +2195,86 @@ export default function Page() {
     }
   }
 
+  function requestAiSupport(incidentId: number) {
+    setGame((current) => {
+      const incident = current.incidents.find((item) => item.id === incidentId);
+      if (!incident) return current;
+      const stage = incident.stages[incident.currentStage];
+      if (!stage) return current;
+
+      const needed = requirementCounts(stage.required);
+      const alreadyAssigned = incident.assignedVehicleIds
+        .map((id) => current.vehicles.find((vehicle) => vehicle.id === id))
+        .filter((vehicle): vehicle is Vehicle => Boolean(vehicle))
+        .reduce(
+          (acc, vehicle) => ({ ...acc, [vehicle.type]: (acc[vehicle.type] ?? 0) + 1 }),
+          {} as Partial<Record<VehicleType, number>>,
+        );
+      incident.aiAssignedUnits.forEach((unit) => {
+        if (!unit.arrived) return;
+        alreadyAssigned[unit.type] = (alreadyAssigned[unit.type] ?? 0) + 1;
+      });
+
+      const nextAiStations = current.aiStations.map((station) => ({
+        ...station,
+        vehicles: station.vehicles.map((vehicle) => ({ ...vehicle })),
+      }));
+      const assignedUnits: Incident["aiAssignedUnits"] = [];
+
+      (Object.keys(needed) as VehicleType[]).forEach((type) => {
+        const missing = Math.max((needed[type] ?? 0) - (alreadyAssigned[type] ?? 0), 0);
+        for (let i = 0; i < missing; i += 1) {
+          const station = nextAiStations.find((item) =>
+            item.vehicles.some((vehicle) => vehicle.available && vehicle.type === type),
+          );
+          if (!station) continue;
+          const aiVehicle = station.vehicles.find(
+            (vehicle) => vehicle.available && vehicle.type === type,
+          );
+          if (!aiVehicle) continue;
+          const km = haversineKm(station, incident);
+          const eta = Math.max(10, Math.round((km / VEHICLE_TYPES[type].speedKmh) * 3600));
+          aiVehicle.available = false;
+          aiVehicle.eta = eta;
+          aiVehicle.incidentId = incident.id;
+          assignedUnits.push({
+            id: aiVehicle.id,
+            type,
+            eta,
+            arrived: false,
+          });
+        }
+      });
+
+      if (assignedUnits.length === 0) return current;
+
+      return {
+        ...current,
+        aiStations: nextAiStations,
+        incidents: current.incidents.map((item) =>
+          item.id === incident.id
+            ? {
+                ...item,
+                status: "RESPONDING",
+                aiAssignedUnits: [...item.aiAssignedUnits, ...assignedUnits],
+              }
+            : item,
+        ),
+        log: [`Requested AI support for ${incident.title} (${assignedUnits.length} units).`, ...current.log].slice(0, 10),
+      };
+    });
+  }
+
   function buyVehicle(stationId: number, type: VehicleType) {
     setGame((current) => {
       const config = VEHICLE_TYPES[type];
       const station = current.stations.find((item) => item.id === stationId);
+      const price = Math.round(config.cost * current.market.vehicleMultiplier[type]);
 
       if (
         !station ||
         station.type !== config.stationType ||
-        current.credits < config.cost
+        station.budget < price
       ) {
         return current;
       }
@@ -1854,15 +2299,19 @@ export default function Page() {
         totalEta: 0,
         incidentId: null,
         route: [],
+        fuel: fuelCapacityFor(type),
+        maxFuel: fuelCapacityFor(type),
       };
 
       return {
         ...current,
-        credits: current.credits - config.cost,
         nextVehicleId: id + 1,
+        stations: current.stations.map((item) =>
+          item.id === station.id ? { ...item, budget: item.budget - price } : item,
+        ),
         vehicles: [...current.vehicles, vehicle],
         log: [
-          `Purchased ${vehicle.name} for ${station.name}.`,
+          `Purchased ${vehicle.name} for ${station.name} (${price}).`,
           ...current.log,
         ].slice(0, 10),
       };
@@ -1877,17 +2326,17 @@ export default function Page() {
       const station = current.stations.find((s) => s.id === stationId);
       if (!station) return current;
       const currentTier = station.upgrades[branch];
-      const cost = Math.round((UPGRADE_BASE_COST * 0.45) + (currentTier + 1) * 18000);
-      if (current.credits < cost) return current;
+      const cost = Math.round(((UPGRADE_BASE_COST * 0.45) + (currentTier + 1) * 18000) * current.market.upgradeMultiplier);
+      if (station.budget < cost) return current;
 
       return {
         ...current,
-        credits: current.credits - cost,
         stations: current.stations.map((item) =>
           item.id === stationId
             ? {
                 ...item,
                 level: item.level + 1,
+                budget: item.budget - cost,
                 upgrades: {
                   ...item.upgrades,
                   [branch]: item.upgrades[branch] + 1,
@@ -1910,24 +2359,36 @@ export default function Page() {
       const station = current.stations.find((s) => s.id === stationId);
       if (!station) return current;
       const cost = costs[course];
-      if (current.credits < cost) return current;
+      if (station.budget < cost) return current;
       return {
         ...current,
-        credits: current.credits - cost,
+        stations: current.stations.map((item) =>
+          item.id === stationId ? { ...item, budget: item.budget - cost } : item,
+        ),
         reputation: Math.min(100, current.reputation + repGain[course] + station.upgrades.trainingWing),
         log: [`Training completed: ${course} at ${station.name}.`, ...current.log].slice(0, 10),
       };
     });
   }
 
-  function hireEmployee(amount = 1) {
+  function hireEmployee(amount = 1, stationId?: number) {
     setGame((current) => {
       const hireCost = HIRING_COST * amount;
-      if (current.credits < hireCost) return current;
+      const station = stationId
+        ? current.stations.find((item) => item.id === stationId)
+        : null;
+      if (stationId && !station) return current;
+      if (station && station.budget < hireCost) return current;
+      if (!station && current.credits < hireCost) return current;
 
       return {
         ...current,
-        credits: current.credits - hireCost,
+        credits: station ? current.credits : current.credits - hireCost,
+        stations: station
+          ? current.stations.map((item) =>
+              item.id === station.id ? { ...item, budget: item.budget - hireCost } : item,
+            )
+          : current.stations,
         employees: current.employees + amount,
         log: [`Hired ${amount} employee${amount > 1 ? "s" : ""}.`, ...current.log].slice(
           0,
@@ -1953,6 +2414,7 @@ export default function Page() {
       setGame((current) => {
         let creditsEarned = 0;
         const progressNotes: string[] = [];
+        const stationBudgetDelta: Record<number, number> = {};
 
         let nextVehicles = current.vehicles.map((vehicle) => {
           if (
@@ -1977,8 +2439,25 @@ export default function Page() {
             };
           }
 
+          if (vehicle.status === "AVAILABLE" && vehicle.fuel < vehicle.maxFuel) {
+            return {
+              ...vehicle,
+              fuel: Math.min(vehicle.maxFuel, vehicle.fuel + vehicle.maxFuel * 0.015),
+            };
+          }
+
           return vehicle;
         });
+
+        const nextAiStations = current.aiStations.map((station) => ({
+          ...station,
+          vehicles: station.vehicles.map((vehicle) => {
+            if (!vehicle.available && vehicle.eta > 0) {
+              return { ...vehicle, eta: vehicle.eta - 1 };
+            }
+            return vehicle;
+          }),
+        }));
 
         const nextIncidents = current.incidents.map((incident) => {
           const nextIncident = incident;
@@ -1989,6 +2468,9 @@ export default function Page() {
           const assignedVehicles = nextIncident.assignedVehicleIds
             .map((id) => nextVehicles.find((v) => v.id === id))
             .filter((v): v is Vehicle => Boolean(v));
+          const aiUnits = nextIncident.aiAssignedUnits.map((unit) =>
+            unit.arrived || unit.eta <= 0 ? { ...unit, arrived: true, eta: 0 } : { ...unit, eta: unit.eta - 1 },
+          );
 
           const finalStageComplete =
             nextIncident.currentStage >= nextIncident.stages.length - 1 &&
@@ -2008,6 +2490,10 @@ export default function Page() {
               },
               {} as Partial<Record<VehicleType, number>>,
             );
+            aiUnits.forEach((unit) => {
+              if (!unit.arrived) return;
+              arrivedCounts[unit.type] = (arrivedCounts[unit.type] ?? 0) + 1;
+            });
             const hasAllRequired = Object.entries(requiredCounts).every(
               ([type, count]) =>
                 (arrivedCounts[type as VehicleType] ?? 0) >= (count ?? 0),
@@ -2043,6 +2529,7 @@ export default function Page() {
                 );
                 if (!station) return vehicle;
                 const returnKm = haversineKm(station, nextIncident);
+                const returnFuel = fuelNeededForTrip(vehicle.type, returnKm);
                 const weatherMultiplier =
                   WEATHER_EFFECTS[current.weather].speedMultiplier;
                 const traffic = getRushHourModifier();
@@ -2064,6 +2551,7 @@ export default function Page() {
                   ...vehicle,
                   status: "RETURNING" as VehicleStatus,
                   incidentId: nextIncident.id,
+                  fuel: Math.max(0, vehicle.fuel - returnFuel),
                   eta: returnEta,
                   totalEta: returnEta,
                   route: [
@@ -2071,6 +2559,18 @@ export default function Page() {
                     [station.lng, station.lat],
                   ],
                 };
+              });
+
+              nextAiStations.forEach((station) => {
+                station.vehicles = station.vehicles.map((vehicle) => {
+                  if (vehicle.incidentId !== nextIncident.id) return vehicle;
+                  return {
+                    ...vehicle,
+                    available: true,
+                    eta: 0,
+                    incidentId: null,
+                  };
+                });
               });
             }
 
@@ -2098,13 +2598,22 @@ export default function Page() {
               const payout = Math.round(
                 nextIncident.reward * qualityMultiplier * trainingMultiplier,
               );
-              creditsEarned += payout - missionCrewCost;
+              const netPayout = payout - missionCrewCost;
+              creditsEarned += Math.round(netPayout * 0.18);
+              const ownedUnits = assignedVehicles.length;
+              const aiUnitsUsed = aiUnits.filter((unit) => unit.arrived).length;
+              const denominator = Math.max(1, ownedUnits + aiUnitsUsed);
+              assignedVehicles.forEach((vehicle) => {
+                const share = Math.round(netPayout / denominator);
+                stationBudgetDelta[vehicle.stationId] = (stationBudgetDelta[vehicle.stationId] ?? 0) + share;
+              });
               progressNotes.push(
                 `${nextIncident.title} completed (+${payout}, payroll -${missionCrewCost}).`,
               );
               return {
                 ...nextIncident,
                 status: "COMPLETE" as IncidentStatus,
+                aiAssignedUnits: aiUnits,
                 filingRemaining: 0,
                 stageWorkRemaining: 0,
               };
@@ -2112,6 +2621,7 @@ export default function Page() {
 
             return {
               ...nextIncident,
+              aiAssignedUnits: aiUnits,
               filingRemaining: nextFiling,
               stageWorkRemaining: 0,
             };
@@ -2122,6 +2632,7 @@ export default function Page() {
           );
           return {
             ...nextIncident,
+            aiAssignedUnits: aiUnits,
             currentStage: nextStage,
             stageWorkRemaining: STAGE_WORK_SECONDS,
             stageWorkTotal: STAGE_WORK_SECONDS,
@@ -2132,8 +2643,15 @@ export default function Page() {
           (incident) => incident.status !== "COMPLETE",
         ).length;
         const maxActiveIncidents = Math.max(1, current.vehicles.length);
+        const sampleStation = current.stations[0];
+        const localSpawnWeather = sampleStation
+          ? weatherAtLocation(current, sampleStation.lat, sampleStation.lng)
+          : current.weather;
         const weatherIncidentMultiplier =
-          WEATHER_EFFECTS[current.weather].incidentMultiplier;
+          WEATHER_EFFECTS[localSpawnWeather].incidentMultiplier;
+        const civilianSpawnMultiplier = current.civilianZones.reduce((sum, zone) =>
+          sum * CIVILIAN_ZONE_EFFECTS[zone.type].spawnMultiplier,
+        1);
 
         const shouldSpawn =
           current.stations.length > 0 &&
@@ -2141,6 +2659,7 @@ export default function Page() {
           Math.random() <
             (activeCount < 1 ? 0.2 : 0.08) *
               weatherIncidentMultiplier *
+              civilianSpawnMultiplier *
               (1 + (50 - current.reputation) / 220);
 
         let finalIncidents = nextIncidents;
@@ -2197,6 +2716,7 @@ export default function Page() {
               currentStage: 0,
               stages: template.stages,
               assignedVehicleIds: [],
+              aiAssignedUnits: [],
               stageWorkRemaining: STAGE_WORK_SECONDS,
               stageWorkTotal: STAGE_WORK_SECONDS,
               filingRemaining: FILING_SECONDS,
@@ -2226,6 +2746,28 @@ export default function Page() {
         const nextWeather = weatherChanged
           ? weatherPool[rand(0, weatherPool.length - 1)]
           : current.weather;
+        const nextWeatherCells = current.weatherCells.map((cell) => ({
+          ...cell,
+          timer: cell.timer - 1,
+        }));
+        const rotatedWeatherCells = nextWeatherCells.some((cell) => cell.timer <= 0)
+          ? generateLocalizedWeatherCells(current.activeCountryCode)
+          : nextWeatherCells;
+        const nextCivilianZones = current.civilianZones.map((zone) => ({
+          ...zone,
+          timer: zone.timer - 1,
+        }));
+        const rotatedCivilianZones = nextCivilianZones.some((zone) => zone.timer <= 0)
+          ? generateCivilianZones(current.activeCountryCode)
+          : nextCivilianZones;
+        const jitterMultiplier = () => Math.min(1.6, Math.max(0.8, 1 + (Math.random() - 0.5) * 0.16));
+        const nextMarket = {
+          vehicleMultiplier: (Object.keys(current.market.vehicleMultiplier) as VehicleType[]).reduce(
+            (acc, type) => ({ ...acc, [type]: current.market.vehicleMultiplier[type] * jitterMultiplier() }),
+            {} as Record<VehicleType, number>,
+          ),
+          upgradeMultiplier: current.market.upgradeMultiplier * jitterMultiplier(),
+        };
         const nextReputation = Math.max(
           0,
           Math.min(
@@ -2240,10 +2782,18 @@ export default function Page() {
         return {
           ...current,
           credits: nextCredits,
+          stations: current.stations.map((station) => ({
+            ...station,
+            budget: station.budget + (stationBudgetDelta[station.id] ?? 0),
+          })),
           resolvedCount: nextResolvedCount,
           reputation: nextReputation,
           weather: nextWeather,
           weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
+          weatherCells: rotatedWeatherCells,
+          civilianZones: rotatedCivilianZones,
+          aiStations: nextAiStations,
+          market: nextMarket,
           missionDailySpawns: nextMissionDailySpawns,
           nextIncidentId,
           vehicles: nextVehicles,
@@ -2401,6 +2951,27 @@ export default function Page() {
         </div>
         <Badge tone="blue">Weather {weatherState.label}</Badge>
         <Badge>Traffic {trafficState.label}</Badge>
+        <Badge>
+          Market x{game.market.upgradeMultiplier.toFixed(2)}
+        </Badge>
+        <Button
+          size="sm"
+          variant={showCoverageHeatmap ? "default" : "outline"}
+          className="h-7 px-2"
+          onClick={() => setShowCoverageHeatmap((value) => !value)}
+          title="Toggle coverage heatmap"
+        >
+          Coverage
+        </Button>
+        <Button
+          size="sm"
+          variant={showWeatherCells ? "default" : "outline"}
+          className="h-7 px-2"
+          onClick={() => setShowWeatherCells((value) => !value)}
+          title="Toggle local weather cells"
+        >
+          Cells
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -2522,43 +3093,47 @@ export default function Page() {
                 <p className="text-slate-400">Unassigned staff</p>
                 <p className="text-base font-semibold">{unassignedEmployees}</p>
               </div>
+              <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-2">
+                <p className="text-slate-400">Station budget</p>
+                <p className="text-base font-semibold">{selectedStation.budget}</p>
+              </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)}
+                disabled={selectedStation.budget < Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000) * game.market.upgradeMultiplier)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "bayCapacity")}
               >
-                Bay +2 ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)})
+                Bay +2 ({Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000) * game.market.upgradeMultiplier)})
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)}
+                disabled={selectedStation.budget < Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000) * game.market.upgradeMultiplier)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "dispatchCenter")}
               >
-                Dispatch ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)})
+                Dispatch ({Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000) * game.market.upgradeMultiplier)})
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)}
+                disabled={selectedStation.budget < Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000) * game.market.upgradeMultiplier)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "trainingWing")}
               >
-                Training Wing ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)})
+                Training Wing ({Math.round(((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000) * game.market.upgradeMultiplier)})
               </Button>
-              <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST} onClick={() => hireEmployee(1)}>
+              <Button size="sm" variant="outline" disabled={selectedStation.budget < HIRING_COST} onClick={() => hireEmployee(1, selectedStation.id)}>
                 <UserPlus className="mr-1 h-3.5 w-3.5" />
                 Hire 1 ({HIRING_COST})
               </Button>
-              <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST * 5} onClick={() => hireEmployee(5)}>
+              <Button size="sm" variant="outline" disabled={selectedStation.budget < HIRING_COST * 5} onClick={() => hireEmployee(5, selectedStation.id)}>
                 Hire 5 ({HIRING_COST * 5})
               </Button>
-              <Button size="sm" variant="outline" disabled={game.credits < 2800} onClick={() => startTrainingCourse(selectedStation.id, "TRIAGE")}>
+              <Button size="sm" variant="outline" disabled={selectedStation.budget < 2800} onClick={() => startTrainingCourse(selectedStation.id, "TRIAGE")}>
                 Triage course (2800)
               </Button>
-              <Button size="sm" variant="outline" disabled={game.credits < 4200} onClick={() => startTrainingCourse(selectedStation.id, "TACTICS")}>
+              <Button size="sm" variant="outline" disabled={selectedStation.budget < 4200} onClick={() => startTrainingCourse(selectedStation.id, "TACTICS")}>
                 Command course (4200)
               </Button>
             </div>
@@ -2571,7 +3146,7 @@ export default function Page() {
                   .filter((vehicle) => vehicle.stationId === selectedStation.id)
                   .map((vehicle) => (
                     <p key={vehicle.id} className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1">
-                      {vehicle.name} • {vehicle.status}
+                      {vehicle.name} • {vehicle.status} • Fuel {Math.round(vehicle.fuel)}/{Math.round(vehicle.maxFuel)}L
                     </p>
                   ))}
               </div>
@@ -2592,6 +3167,7 @@ export default function Page() {
                     ).length;
                     const hasCapacity = usedCapacity < stationCapacity(selectedStation);
                     const hasStaff = unassignedEmployees >= config.crew;
+                    const marketCost = Math.round(config.cost * game.market.vehicleMultiplier[type]);
                     const Icon =
                       type === "ENGINE" || type === "LADDER"
                         ? Truck
@@ -2605,11 +3181,11 @@ export default function Page() {
                         key={`${selectedStation.id}-${type}`}
                         size="sm"
                         variant="outline"
-                        disabled={game.credits < config.cost || !hasCapacity || !hasStaff}
+                        disabled={selectedStation.budget < marketCost || !hasCapacity || !hasStaff}
                         onClick={() => buyVehicle(selectedStation.id, type)}
                       >
                         <Icon className="mr-1 h-3.5 w-3.5" />
-                        {config.label}
+                        {config.label} ({marketCost})
                       </Button>
                     );
                   })}
@@ -2651,7 +3227,7 @@ export default function Page() {
               <p className="mt-1 text-xs text-slate-400">
                 Stage: {notice.stageLabel} • Required: {notice.required.join(", ") || "Any"}
               </p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 <Button
                   size="sm"
                   variant="outline"
@@ -2661,6 +3237,13 @@ export default function Page() {
                   }}
                 >
                   Dispatch now
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => requestAiSupport(notice.id)}
+                >
+                  Request AI
                 </Button>
                 <Button
                   size="sm"
@@ -2706,6 +3289,7 @@ export default function Page() {
           dispatchRequiredVehicles(incident as Incident)
         }
         onDispatchVehicle={dispatch}
+        onRequestAiSupport={(incident) => requestAiSupport(incident.id)}
       />
     </main>
   );

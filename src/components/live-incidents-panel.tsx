@@ -47,6 +47,7 @@ type Props = {
   onFocusIncident: (incident: IncidentLike) => void;
   onDispatchSuggested: (incident: IncidentLike) => void;
   onDispatchVehicle: (vehicleId: number, incidentId: number) => void;
+  onRequestAiSupport: (incident: IncidentLike) => void;
 };
 
 function Badge({
@@ -81,6 +82,7 @@ export function LiveIncidentsPanel({
   onFocusIncident,
   onDispatchSuggested,
   onDispatchVehicle,
+  onRequestAiSupport,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
@@ -160,6 +162,13 @@ export function LiveIncidentsPanel({
                   disabled={credits < dispatchCost}
                 >
                   Auto
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onRequestAiSupport(incident)}
+                >
+                  AI
                 </Button>
               </div>
               <p className="relative z-10 mt-2 text-[10px] text-slate-300">
