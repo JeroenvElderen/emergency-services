@@ -1512,57 +1512,73 @@ export default function Page() {
   const updateVehicleRouteLine = useCallback(
     (vehicle: Vehicle, remainingRoute: [number, number][]) => {
       const map = mapRef.current;
-      if (!map || !map.isStyleLoaded()) return;
+      if (!map) return;
 
       const routeId = `vehicle-route-${vehicle.id}`;
+      const sourceId = routeId;
 
-      if (remainingRoute.length < 2) {
-        if (map.getLayer(routeId)) map.removeLayer(routeId);
-        if (map.getSource(routeId)) map.removeSource(routeId);
-        routeLayerIdsRef.current = routeLayerIdsRef.current.filter(
-          (id) => id !== routeId,
-        );
-        return;
-      }
+      const draw = () => {
+        if (!map.isStyleLoaded()) return;
 
-      const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: remainingRoute,
-        },
-        properties: {},
-      };
+        if (remainingRoute.length < 2) {
+          if (map.getLayer(routeId)) map.removeLayer(routeId);
+          if (map.getSource(sourceId)) map.removeSource(sourceId);
+          routeLayerIdsRef.current = routeLayerIdsRef.current.filter(
+            (id) => id !== routeId,
+          );
+          return;
+        }
 
-      const source = map.getSource(routeId) as mapboxgl.GeoJSONSource | undefined;
+        const routeData: GeoJSON.Feature<GeoJSON.LineString> = {
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: remainingRoute,
+          },
+          properties: {},
+        };
+
+        const source = map.getSource(sourceId) as mapboxgl.GeoJSONSource | undefined;
 
       if (source) {
-        source.setData(routeData);
-      } else {
-        map.addSource(routeId, {
-          type: "geojson",
-          data: routeData,
-        });
-      }
+          source.setData(routeData);
+        } else {
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: routeData,
+          });
+        }
 
       if (!map.getLayer(routeId)) {
-        map.addLayer({
-          id: routeId,
-          type: "line",
-          source: routeId,
-          paint: {
-            "line-color": getVehicleRouteColor(vehicle.id),
-            "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
-            "line-opacity": 0.8,
-            ...(vehicle.status === "RETURNING"
-              ? { "line-dasharray": [1.4, 1.2] }
-              : {}),
-          },
-        });
-      }
+          map.addLayer({
+            id: routeId,
+            type: "line",
+            source: sourceId,
+            layout: {
+              "line-cap": "round",
+              "line-join": "round",
+            },
+            paint: {
+              "line-color": getVehicleRouteColor(vehicle.id),
+              "line-width": vehicle.status === "RETURNING" ? 2.5 : 3.5,
+              "line-opacity": 0.9,
+              ...(vehicle.status === "RETURNING"
+                ? { "line-dasharray": [1.4, 1.2] }
+                : {}),
+            },
+          });
+        }
 
-      if (!routeLayerIdsRef.current.includes(routeId)) {
-        routeLayerIdsRef.current.push(routeId);
+        if (!routeLayerIdsRef.current.includes(routeId)) {
+          routeLayerIdsRef.current.push(routeId);
+        }
+      };
+
+      if (map.isStyleLoaded()) {
+        draw();
+      } else {
+        map.once("styledata", draw);
+        map.once("idle", draw);
       }
     },
     [],
@@ -1669,8 +1685,7 @@ export default function Page() {
 
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
-        ((vehicle.status === "DISPATCHED" && vehicle.eta > 0) ||
-          vehicle.status === "RETURNING") &&
+        (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
         vehicle.incidentId !== null;
 
       if (!shouldRenderVehicle) {
@@ -1690,7 +1705,10 @@ export default function Page() {
         removeVehicleRoute(vehicle.id);
         return;
       }
-      const progress = getSmoothedProgress(vehicle);
+      const progress =
+        vehicle.status === "DISPATCHED" && vehicle.eta <= 0
+          ? 0.999
+          : getSmoothedProgress(vehicle);
       const fallback = vehicle.status === "DISPATCHED" ? station : incident;
       const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
       const remainingRoute = getRemainingRoute(vehicle.route, progress, fallback);
@@ -1788,7 +1806,10 @@ export default function Page() {
           const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
           if (!station || !incident) return;
 
-          const progress = getSmoothedProgress(vehicle);
+          const progress =
+            vehicle.status === "DISPATCHED" && vehicle.eta <= 0
+              ? 0.999
+              : getSmoothedProgress(vehicle);
           const fallback = vehicle.status === "DISPATCHED" ? station : incident;
           const [lng, lat] = getRoutePosition(vehicle.route, progress, fallback);
           const remainingRoute = getRemainingRoute(
