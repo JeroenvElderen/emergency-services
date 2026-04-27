@@ -12,6 +12,8 @@ Each file is an array of mission objects.
   "id": "100",
   "name": "Bus Stop Waste Bin Fire",
   "average_credits": 480,
+  "reward_floor": 320,
+  "reward_ceiling": 820,
   "requirements": {
     "firetrucks": 1
   },
@@ -37,7 +39,9 @@ Each file is an array of mission objects.
 
 - `id` (string): Unique mission id.
 - `name` (string): Mission display title.
-- `average_credits` (number): Base reward used for payout scaling.
+- `average_credits` (number): Baseline mission value used for reward simulation.
+- `reward_floor` (number, optional): Minimum spawn reward for this mission.
+- `reward_ceiling` (number, optional): Maximum spawn reward for this mission.
 - `requirements` (object): Required vehicle counts for stage 1.
 - `prerequisites` (object, optional): Conditions needed for the mission to spawn.
 - `stages` (array, optional): Extra stages appended to this mission.

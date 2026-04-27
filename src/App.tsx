@@ -97,6 +97,8 @@ type MissionDefinition = {
   spawn_limit_per_day?: number;
   unique_active?: boolean;
   average_credits: number;
+  reward_floor?: number;
+  reward_ceiling?: number;
   requirements: Partial<Record<string, number>>;
   prerequisites?: Partial<Record<string, number>>;
   stages?: MissionStageDefinition[];
@@ -128,6 +130,8 @@ type SpawnableMission = {
   title: string;
   category: IncidentCategory;
   baseReward: number;
+  rewardFloor?: number;
+  rewardCeiling?: number;
   stages: IncidentStage[];
   fixedLocation?: {
     lat: number;
@@ -424,9 +428,47 @@ function missionToTemplate(
     title: mission.name,
     category,
     baseReward: mission.average_credits,
+    rewardFloor: mission.reward_floor,
+    rewardCeiling: mission.reward_ceiling,
     stages,
     fixedLocation: mission.fixed_location,
   };
+}
+
+function calculateIncidentReward(
+  template: SpawnableMission,
+  difficulty: number,
+  reputation: number,
+) {
+  const requiredVehicles = template.stages.reduce(
+    (sum, stage) => sum + stage.required.length,
+    0,
+  );
+  const complexityMultiplier =
+    1 +
+    Math.max(requiredVehicles - 1, 0) * 0.18 +
+    Math.max(template.stages.length - 1, 0) * 0.12;
+  const difficultyMultiplier = 1 + Math.max(difficulty - 1, 0) * 0.08;
+  const reputationMultiplier = 0.92 + reputation / 500;
+  const randomMultiplier = 0.9 + Math.random() * 0.2;
+
+  const rawReward =
+    template.baseReward *
+    complexityMultiplier *
+    difficultyMultiplier *
+    reputationMultiplier *
+    randomMultiplier;
+
+  const minReward = Math.max(
+    25,
+    Math.round(template.rewardFloor ?? template.baseReward * 0.65),
+  );
+  const maxReward = Math.max(
+    minReward,
+    Math.round(template.rewardCeiling ?? template.baseReward * 2.2),
+  );
+
+  return Math.round(Math.min(maxReward, Math.max(minReward, rawReward)));
 }
 
 function getCurrentDayKey() {
@@ -2149,8 +2191,9 @@ export default function Page() {
                 (sum, station) => sum + station.upgrades.trainingWing,
                 0,
               );
-              const qualityMultiplier = 0.8 + current.reputation / 100;
-              const trainingMultiplier = 1 + trainingBonus * 0.01;
+              const qualityMultiplier = 0.92 + current.reputation / 500;
+              const trainingMultiplier =
+                1 + Math.min(trainingBonus, 30) * 0.004;
               const payout = Math.round(
                 nextIncident.reward * qualityMultiplier * trainingMultiplier,
               );
@@ -2242,13 +2285,10 @@ export default function Page() {
               title: template.title,
               category: template.category,
               severity: difficulty,
-              reward: Math.max(
-                650,
-                Math.round(
-                  template.baseReward *
-                    (1.3 + (difficulty - 1) * 0.14) *
-                    (0.86 + (100 - current.reputation) / 240),
-                ),
+              reward: calculateIncidentReward(
+                template,
+                difficulty,
+                current.reputation,
               ),
               lat,
               lng,
