@@ -120,6 +120,7 @@ type AiStation = {
   id: number;
   name: string;
   type: StationType;
+  countryCode: string;
   lat: number;
   lng: number;
   level: number;
@@ -135,6 +136,7 @@ type AiStation = {
     homeLng: number;
     targetLat: number | null;
     targetLng: number | null;
+    route: [number, number][];
   }[];
 };
 
@@ -142,6 +144,7 @@ type AiMission = {
   id: number;
   title: string;
   category: IncidentCategory;
+  countryCode: string;
   lat: number;
   lng: number;
   status: "OPEN" | "RESPONDING" | "RESOLVING" | "COMPLETE";
@@ -557,6 +560,104 @@ function generateCivilianZones(countryCode: string): CivilianZone[] {
   }));
 }
 
+function buildStationMarkerElement(
+  type: StationType,
+  title: string,
+  colorOverride?: string,
+) {
+  const el = document.createElement("div");
+  el.className = "relative flex h-10 w-10 items-start justify-center";
+  el.title = title;
+  const color =
+    colorOverride ??
+    type === "FIRE"
+      ? "rgba(244,63,94,0.95)"
+      : type === "EMS"
+        ? "rgba(16,185,129,0.95)"
+        : "rgba(14,165,233,0.95)";
+  const label = type === "FIRE" ? "🚒" : type === "EMS" ? "🏥" : "🏢";
+  el.innerHTML = `
+    <div style="position:relative;display:flex;height:30px;width:30px;align-items:center;justify-content:center;border-radius:8px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:15px;">
+      ${label}
+    </div>
+    <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
+  `;
+  return el;
+}
+const AI_COMPANY_COLORS = [
+  "rgba(239,68,68,0.95)",
+  "rgba(59,130,246,0.95)",
+  "rgba(16,185,129,0.95)",
+  "rgba(245,158,11,0.95)",
+  "rgba(168,85,247,0.95)",
+  "rgba(236,72,153,0.95)",
+  "rgba(20,184,166,0.95)",
+  "rgba(99,102,241,0.95)",
+  "rgba(132,204,22,0.95)",
+  "rgba(249,115,22,0.95)",
+];
+
+function aiCompanyColor(countryCode: string, unlockedCountryCodes: string[]) {
+  const companyCountries = unlockedCountryCodes.slice(0, 10);
+  const index = companyCountries.indexOf(countryCode);
+  return AI_COMPANY_COLORS[index >= 0 ? index : 0];
+}
+
+async function fetchOfficialStationSites(
+  countryCode: string,
+  stationType: StationType,
+  limit = 30,
+): Promise<RealStationSite[]> {
+  const country = findCountry(countryCode);
+  const selectorsByType: Record<StationType, string[]> = {
+    FIRE: [
+      'nwr["amenity"="fire_station"]',
+      'nwr["emergency"="fire_station"]',
+    ],
+    EMS: [
+      'nwr["amenity"="hospital"]',
+      'nwr["emergency"="ambulance_station"]',
+    ],
+    POLICE: ['nwr["amenity"="police"]'],
+  };
+  const bbox = `${country.bounds.minLat},${country.bounds.minLng},${country.bounds.maxLat},${country.bounds.maxLng}`;
+  const query = `[out:json][timeout:25];(${selectorsByType[stationType]
+    .map((selector) => `${selector}(${bbox});`)
+    .join("")});out center tags ${limit};`;
+  const response = await fetch("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    body: query,
+  });
+  if (!response.ok) return [];
+  const data = (await response.json()) as {
+    elements?: {
+      id: number;
+      lat?: number;
+      lon?: number;
+      center?: { lat: number; lon: number };
+      tags?: { name?: string };
+    }[];
+  };
+  return (
+    data.elements
+      ?.map((item) => {
+        const lat = item.lat ?? item.center?.lat;
+        const lng = item.lon ?? item.center?.lon;
+        if (typeof lat !== "number" || typeof lng !== "number") return null;
+        return {
+          id: `official-${stationType}-${item.id}`,
+          name:
+            item.tags?.name ?? `${STATION_TYPES[stationType].label} Site ${item.id}`,
+          type: stationType,
+          lat,
+          lng,
+        };
+      })
+      .filter((item): item is RealStationSite => Boolean(item))
+      .slice(0, limit) ?? []
+  );
+}
+
 function createAiStations(countryCode: string, anchor?: { lat: number; lng: number }): AiStation[] {
   const country = findCountry(countryCode);
   const stationTypes: StationType[] = ["FIRE", "EMS", "POLICE"];
@@ -574,6 +675,7 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
       homeLng: anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8,
       targetLat: null,
       targetLng: null,
+      route: [],
     }));
     const stationLat = anchor ? anchor.lat + (Math.random() - 0.5) * 0.3 : country.center[1] + (Math.random() - 0.5) * 0.8;
     const stationLng = anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8;
@@ -581,6 +683,7 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
       id: index + 1,
       name: `AI ${STATION_TYPES[type].label} HQ`,
       type,
+      countryCode,
       lat: stationLat,
       lng: stationLng,
       level: 2,
@@ -763,6 +866,18 @@ function findCountry(code: string) {
   return EU_COUNTRIES.find((country) => country.code === code) ?? EU_COUNTRIES[0];
 }
 
+function findCountryForCoordinates(lat: number, lng: number) {
+  return (
+    EU_COUNTRIES.find(
+      (country) =>
+        lat >= country.bounds.minLat &&
+        lat <= country.bounds.maxLat &&
+        lng >= country.bounds.minLng &&
+        lng <= country.bounds.maxLng,
+    ) ?? null
+  );
+}
+
 function loadGame(): GameState {
   if (typeof window === "undefined") return initialState;
 
@@ -789,6 +904,10 @@ function loadGame(): GameState {
       aiStations:
         parsed.aiStations?.map((station) => ({
           ...station,
+          countryCode:
+            station.countryCode ??
+            findCountryForCoordinates(station.lat, station.lng)?.code ??
+            activeCountryCode,
           level: station.level ?? 2,
           budget: station.budget ?? 160000,
           vehicles: station.vehicles.map((vehicle) => ({
@@ -803,11 +922,23 @@ function loadGame(): GameState {
             homeLng: vehicle.homeLng ?? station.lng,
             targetLat: vehicle.targetLat ?? null,
             targetLng: vehicle.targetLng ?? null,
+            route: vehicle.route ?? [],
           })),
         })) ?? createAiStations(activeCountryCode),
-      aiMissions: parsed.aiMissions ?? [],
+      aiMissions:
+        parsed.aiMissions?.map((mission) => ({
+          ...mission,
+          countryCode:
+            mission.countryCode ??
+            findCountryForCoordinates(mission.lat, mission.lng)?.code ??
+            activeCountryCode,
+        })) ?? [],
       nextAiMissionId: parsed.nextAiMissionId ?? 100000,
-      nextAiStationId: parsed.nextAiStationId ?? 4,
+      nextAiStationId:
+        parsed.nextAiStationId ??
+        ((parsed.aiStations?.length ?? 0) > 0
+          ? Math.max(...(parsed.aiStations ?? []).map((station) => station.id)) + 1
+          : 4),
       aiBuildTimer: parsed.aiBuildTimer ?? AI_BUILD_INTERVAL_SECONDS,
       aiMissionTimer: parsed.aiMissionTimer ?? AI_MISSION_INTERVAL_SECONDS,
       market: parsed.market ?? {
@@ -1049,6 +1180,11 @@ export default function Page() {
   const civilianMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const aiVehicleMarkerRefs = useRef<Map<string, mapboxgl.Marker>>(new Map());
+  const aiOfficialSitesRef = useRef<Record<StationType, RealStationSite[]>>({
+    FIRE: [],
+    EMS: [],
+    POLICE: [],
+  });
   const vehicleProgressFloorRef = useRef<
     Map<
       number,
@@ -1061,9 +1197,23 @@ export default function Page() {
     >
   >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
+  const pendingAiRouteVehicleKeysRef = useRef<Set<string>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
+
+  const pickOfficialAiSite = useCallback(
+    (type: StationType, usedSiteIds?: Set<string>) => {
+      const candidates = aiOfficialSitesRef.current[type];
+      if (candidates.length === 0) return null;
+      const unused = usedSiteIds
+        ? candidates.filter((site) => !usedSiteIds.has(site.id))
+        : candidates;
+      const pool = unused.length > 0 ? unused : candidates;
+      return pool[rand(0, pool.length - 1)] ?? null;
+    },
+    [],
+  );
 
   const isWithinCountryBounds = useCallback(
     (lat: number, lng: number, countryCode: string) => {
@@ -1455,19 +1605,30 @@ export default function Page() {
           nextVehicleId += 2;
         }
 
+        const claimedAiStation = current.aiStations
+          .filter(
+            (aiStation) =>
+              aiStation.countryCode === current.activeCountryCode &&
+              aiStation.type === type &&
+              haversineKm(aiStation, { lat, lng }) <= 0.2,
+          )
+          .sort((a, b) => haversineKm(a, { lat, lng }) - haversineKm(b, { lat, lng }))[0];
+        const nextAiStations = claimedAiStation
+          ? current.aiStations.filter((aiStation) => aiStation.id !== claimedAiStation.id)
+          : current.aiStations;
+
         return {
           ...current,
           credits: current.credits - buildCost,
           nextStationId: id + 1,
           nextVehicleId,
           stations: [...current.stations, station],
-          aiStations:
-            isFirstStation
-              ? createAiStations(current.activeCountryCode, { lat, lng })
-              : current.aiStations,
+          aiStations: nextAiStations,
           vehicles,
           log: [
-            isFirstStation
+            claimedAiStation
+              ? `Built ${station.name} and acquired ${claimedAiStation.name}.`
+              : isFirstStation
               ? `Built ${station.name}. Game started with 2 ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and 10 employees.`
               : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.`,
             ...current.log,
@@ -1512,14 +1673,42 @@ export default function Page() {
     setGame((current) => {
       if (current.unlockedCountryCodes.includes(countryCode)) return current;
       if (current.credits < COUNTRY_LICENSE_COST) return current;
+      const nextUnlocked = [...current.unlockedCountryCodes, countryCode];
+      const canCreateAiCompany = nextUnlocked.length <= 10;
+      const hasAiInCountry = current.aiStations.some(
+        (station) => station.countryCode === countryCode,
+      );
 
       return {
         ...current,
         credits: current.credits - COUNTRY_LICENSE_COST,
-        unlockedCountryCodes: [...current.unlockedCountryCodes, countryCode],
+        unlockedCountryCodes: nextUnlocked,
         activeCountryCode: countryCode,
+        aiStations:
+          canCreateAiCompany && !hasAiInCountry
+            ? [
+                ...current.aiStations,
+                ...createAiStations(countryCode).map((station) => ({
+                  ...station,
+                  id: current.nextAiStationId + station.id - 1,
+                  vehicles: station.vehicles.map((vehicle, index) => ({
+                    ...vehicle,
+                    id:
+                      (current.nextAiStationId + station.id - 1) * 100 +
+                      index +
+                      1,
+                  })),
+                })),
+              ]
+            : current.aiStations,
+        nextAiStationId:
+          canCreateAiCompany && !hasAiInCountry
+            ? current.nextAiStationId + 3
+            : current.nextAiStationId,
         log: [
-          `Purchased ${findCountry(countryCode).name} license for ${COUNTRY_LICENSE_COST}.`,
+          canCreateAiCompany
+            ? `Purchased ${findCountry(countryCode).name} license for ${COUNTRY_LICENSE_COST}. AI company active in this licensed country.`
+            : `Purchased ${findCountry(countryCode).name} license for ${COUNTRY_LICENSE_COST}.`,
           ...current.log,
         ].slice(0, 10),
       };
@@ -1599,6 +1788,60 @@ export default function Page() {
       setRealStations([]);
     }
   }, [selectedBuild]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadOfficialAiSites = async () => {
+      const [fireSites, emsSites, policeSites] = await Promise.all([
+        fetchOfficialStationSites(game.activeCountryCode, "FIRE"),
+        fetchOfficialStationSites(game.activeCountryCode, "EMS"),
+        fetchOfficialStationSites(game.activeCountryCode, "POLICE"),
+      ]);
+      if (isCancelled) return;
+
+      aiOfficialSitesRef.current = {
+        FIRE: fireSites,
+        EMS: emsSites,
+        POLICE: policeSites,
+      };
+
+      setGame((current) => {
+        if (current.aiStations.length === 0) return current;
+
+        const nextByTypeUsedIds: Record<StationType, Set<string>> = {
+          FIRE: new Set<string>(),
+          EMS: new Set<string>(),
+          POLICE: new Set<string>(),
+        };
+        const nextStations = current.aiStations.map((station) => {
+          if (station.countryCode !== current.activeCountryCode) return station;
+          const site = pickOfficialAiSite(station.type, nextByTypeUsedIds[station.type]);
+          if (!site) return station;
+          nextByTypeUsedIds[station.type].add(site.id);
+          return {
+            ...station,
+            lat: site.lat,
+            lng: site.lng,
+            vehicles: station.vehicles.map((vehicle) => ({
+              ...vehicle,
+              homeLat: site.lat,
+              homeLng: site.lng,
+            })),
+          };
+        });
+        return {
+          ...current,
+          aiStations: nextStations,
+        };
+      });
+    };
+
+    void loadOfficialAiSites();
+    return () => {
+      isCancelled = true;
+    };
+  }, [game.activeCountryCode, pickOfficialAiSite]);
 
   useEffect(() => {
     if (!mapContainerRef.current || !mapToken || mapRef.current) return;
@@ -1874,6 +2117,68 @@ export default function Page() {
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
   useEffect(() => {
+    if (!mapToken) return;
+
+    const routeCandidates = game.aiStations.flatMap((station) =>
+      station.vehicles
+        .filter(
+          (vehicle) =>
+            (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+            vehicle.targetLat !== null &&
+            vehicle.targetLng !== null &&
+            vehicle.route.length < 2,
+        )
+        .map((vehicle) => ({ station, vehicle })),
+    );
+
+    const freshCandidates = routeCandidates.filter(({ station, vehicle }) => {
+      const key = `${station.id}-${vehicle.id}`;
+      return !pendingAiRouteVehicleKeysRef.current.has(key);
+    });
+    if (freshCandidates.length === 0) return;
+    freshCandidates.forEach(({ station, vehicle }) => {
+      pendingAiRouteVehicleKeysRef.current.add(`${station.id}-${vehicle.id}`);
+    });
+
+    void Promise.all(
+      freshCandidates.map(async ({ station, vehicle }) => {
+        const from =
+          vehicle.status === "RETURNING"
+            ? { lat: vehicle.targetLat!, lng: vehicle.targetLng! }
+            : { lat: vehicle.homeLat, lng: vehicle.homeLng };
+        const to =
+          vehicle.status === "RETURNING"
+            ? { lat: vehicle.homeLat, lng: vehicle.homeLng }
+            : { lat: vehicle.targetLat!, lng: vehicle.targetLng! };
+        const route = await fetchRoadRoute(from, to, mapToken);
+        return {
+          key: `${station.id}-${vehicle.id}`,
+          stationId: station.id,
+          vehicleId: vehicle.id,
+          route: route?.coordinates ?? [],
+        };
+      }),
+    ).then((results) => {
+      setGame((current) => {
+        const updates = new Map(results.map((item) => [item.key, item.route]));
+        return {
+          ...current,
+          aiStations: current.aiStations.map((station) => ({
+            ...station,
+            vehicles: station.vehicles.map((vehicle) => {
+              const key = `${station.id}-${vehicle.id}`;
+              const route = updates.get(key);
+              if (!route || route.length < 2) return vehicle;
+              return { ...vehicle, route };
+            }),
+          })),
+        };
+      });
+      results.forEach((result) => pendingAiRouteVehicleKeysRef.current.delete(result.key));
+    });
+  }, [game.aiStations, mapToken]);
+
+  useEffect(() => {
     if (!mapRef.current) return;
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
@@ -1890,23 +2195,7 @@ export default function Page() {
     civilianMarkerRefs.current = [];
 
     game.stations.forEach((station) => {
-      const el = document.createElement("div");
-      el.className = "relative flex h-10 w-10 items-start justify-center";
-      el.title = station.name;
-      const color =
-        station.type === "FIRE"
-          ? "rgba(244,63,94,0.95)"
-          : station.type === "EMS"
-            ? "rgba(16,185,129,0.95)"
-            : "rgba(14,165,233,0.95)";
-      const label =
-        station.type === "FIRE" ? "🚒" : station.type === "EMS" ? "🏥" : "🏢";
-      el.innerHTML = `
-        <div style="position:relative;display:flex;height:30px;width:30px;align-items:center;justify-content:center;border-radius:8px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:15px;">
-          ${label}
-        </div>
-        <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
-      `;
+      const el = buildStationMarkerElement(station.type, station.name);
       el.onclick = () => setSelectedStationId(station.id);
 
       stationMarkerRefs.current.push(
@@ -2018,7 +2307,13 @@ export default function Page() {
     });
 
     const activeAiVehicleKeys = new Set<string>();
-    game.aiStations.forEach((station) => {
+    game.aiStations
+      .filter((station) => station.countryCode === game.activeCountryCode)
+      .forEach((station) => {
+      const companyColor = aiCompanyColor(
+        station.countryCode,
+        game.unlockedCountryCodes,
+      );
       station.vehicles.forEach((vehicle) => {
         if (
           vehicle.status === "AVAILABLE" ||
@@ -2040,8 +2335,14 @@ export default function Page() {
           vehicle.status === "RETURNING"
             ? { lat: vehicle.homeLat, lng: vehicle.homeLng }
             : { lat: vehicle.targetLat, lng: vehicle.targetLng };
-        const lat = from.lat + (to.lat - from.lat) * clamped;
-        const lng = from.lng + (to.lng - from.lng) * clamped;
+        const fullRoute =
+          vehicle.route.length >= 2
+            ? vehicle.route
+            : ([
+                [from.lng, from.lat],
+                [to.lng, to.lat],
+              ] as [number, number][]);
+        const [lng, lat] = getRoutePosition(fullRoute, clamped, to);
 
         const existing = aiVehicleMarkerRefs.current.get(key);
         if (existing) {
@@ -2050,7 +2351,9 @@ export default function Page() {
         }
 
         const el = document.createElement("div");
-        el.className = "flex h-7 w-7 items-center justify-center rounded-full border border-indigo-100 bg-indigo-500/95 text-xs text-white shadow";
+        el.className = "flex h-7 w-7 items-center justify-center rounded-full border text-xs text-white shadow";
+        el.style.backgroundColor = companyColor;
+        el.style.borderColor = "rgba(241,245,249,0.9)";
         el.title = `AI ${VEHICLE_TYPES[vehicle.type].label}`;
         el.textContent = "🤖";
         aiVehicleMarkerRefs.current.set(
@@ -2060,7 +2363,7 @@ export default function Page() {
             .addTo(mapRef.current!),
         );
       });
-    });
+      });
     aiVehicleMarkerRefs.current.forEach((marker, key) => {
       if (activeAiVehicleKeys.has(key)) return;
       marker.remove();
@@ -2092,24 +2395,36 @@ export default function Page() {
       });
     }
 
-    game.aiStations.forEach((station) => {
-      const el = document.createElement("div");
-      el.className = "flex h-8 w-8 items-center justify-center rounded-full border-2 border-indigo-200 bg-indigo-600/95 text-sm text-white shadow-lg";
-      el.title = `${station.name} (AI)`;
-      el.innerHTML = "🤖";
-      aiStationMarkerRefs.current.push(
-        new mapboxgl.Marker({ element: el, anchor: "center" })
-          .setLngLat([station.lng, station.lat])
-          .addTo(mapRef.current!),
-      );
-    });
+    game.aiStations
+      .filter((station) => station.countryCode === game.activeCountryCode)
+      .forEach((station) => {
+        const el = buildStationMarkerElement(
+          station.type,
+          `${station.name} (AI)`,
+          aiCompanyColor(station.countryCode, game.unlockedCountryCodes),
+        );
+        aiStationMarkerRefs.current.push(
+          new mapboxgl.Marker({ element: el, anchor: "bottom" })
+            .setLngLat([station.lng, station.lat])
+            .addTo(mapRef.current!),
+        );
+      });
 
     game.aiMissions
-      .filter((mission) => mission.status !== "COMPLETE")
+      .filter(
+        (mission) =>
+          mission.status !== "COMPLETE" &&
+          mission.countryCode === game.activeCountryCode,
+      )
       .forEach((mission) => {
         const el = document.createElement("button");
         el.className =
-          "flex h-7 w-7 items-center justify-center rounded-full border-2 border-indigo-100 bg-indigo-700 text-white shadow-lg";
+          "flex h-7 w-7 items-center justify-center rounded-full border-2 text-white shadow-lg";
+        el.style.backgroundColor = aiCompanyColor(
+          mission.countryCode,
+          game.unlockedCountryCodes,
+        );
+        el.style.borderColor = "rgba(241,245,249,0.95)";
         el.title = `AI Mission: ${mission.title}`;
         el.innerHTML = "🛰️";
         el.onclick = () => {
@@ -2736,6 +3051,7 @@ export default function Page() {
                     incidentId: null,
                     targetLat: null,
                     targetLng: null,
+                    route: [],
                   };
                 });
               });
@@ -2834,6 +3150,7 @@ export default function Page() {
                 incidentId: null,
                 targetLat: null,
                 targetLng: null,
+                route: [],
               };
             }
             return vehicle;
@@ -2882,23 +3199,64 @@ export default function Page() {
           });
         }
 
+        nextAiStations.forEach((station) => {
+          const preferredType =
+            station.type === "FIRE"
+              ? "ENGINE"
+              : station.type === "EMS"
+                ? "AMBULANCE"
+                : "PATROL";
+          const vehicleCost = Math.round(VEHICLE_TYPES[preferredType].cost * 1.1);
+          if (
+            station.budget >= vehicleCost &&
+            station.vehicles.length < Math.max(4, station.level * 3) &&
+            Math.random() < 0.08
+          ) {
+            const nextVehicleNumber = station.vehicles.length + 1;
+            station.vehicles.push({
+              id: station.id * 100 + nextVehicleNumber,
+              type: preferredType,
+              status: "AVAILABLE",
+              eta: 0,
+              totalEta: 0,
+              incidentId: null,
+              homeLat: station.lat,
+              homeLng: station.lng,
+              targetLat: null,
+              targetLng: null,
+              route: [],
+            });
+            station.budget -= vehicleCost;
+          }
+        });
+
         let nextAiStationId = current.nextAiStationId;
         let nextAiMissionId = current.nextAiMissionId;
         let nextAiBuildTimer = current.aiBuildTimer - 1;
         let nextAiMissionTimer = current.aiMissionTimer - 1;
 
-        if (current.stations.length > 0 && nextAiBuildTimer <= 0) {
+        if (
+          current.stations.length > 0 &&
+          nextAiBuildTimer <= 0 &&
+          current.unlockedCountryCodes.slice(0, 10).includes(current.activeCountryCode)
+        ) {
           const anchorStation = current.stations[rand(0, current.stations.length - 1)];
           const type: StationType = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as StationType;
           const vehiclePool: VehicleType[] =
             type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
-          const lat = anchorStation.lat + (Math.random() - 0.5) * 0.35;
-          const lng = anchorStation.lng + (Math.random() - 0.5) * 0.35;
+          const officialSite = pickOfficialAiSite(type);
+          const lat = officialSite
+            ? officialSite.lat
+            : anchorStation.lat + (Math.random() - 0.5) * 0.35;
+          const lng = officialSite
+            ? officialSite.lng
+            : anchorStation.lng + (Math.random() - 0.5) * 0.35;
           const stationId = nextAiStationId;
           nextAiStations.push({
             id: stationId,
             name: `AI ${STATION_TYPES[type].label} Forward ${stationId}`,
             type,
+            countryCode: current.activeCountryCode,
             lat,
             lng,
             level: 1,
@@ -2914,6 +3272,7 @@ export default function Page() {
               homeLng: lng,
               targetLat: null,
               targetLng: null,
+              route: [],
             })),
           });
           nextAiStationId += 1;
@@ -2921,16 +3280,26 @@ export default function Page() {
           progressNotes.unshift(`AI expanded with a new ${STATION_TYPES[type].label.toLowerCase()} station near your network.`);
         }
 
-        if (current.stations.length > 0 && nextAiMissionTimer <= 0) {
+        if (
+          current.stations.length > 0 &&
+          nextAiMissionTimer <= 0 &&
+          current.unlockedCountryCodes.slice(0, 10).includes(current.activeCountryCode)
+        ) {
           const anchor = current.stations[rand(0, current.stations.length - 1)];
           const category: IncidentCategory = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as IncidentCategory;
           const missionId = nextAiMissionId;
-          const lat = anchor.lat + (Math.random() - 0.5) * 0.28;
-          const lng = anchor.lng + (Math.random() - 0.5) * 0.28;
+          const officialSite = pickOfficialAiSite(category);
+          const lat = officialSite
+            ? officialSite.lat
+            : anchor.lat + (Math.random() - 0.5) * 0.28;
+          const lng = officialSite
+            ? officialSite.lng
+            : anchor.lng + (Math.random() - 0.5) * 0.28;
           const aiMission: AiMission = {
             id: missionId,
             title: `AI ${category} mission #${missionId}`,
             category,
+            countryCode: current.activeCountryCode,
             lat,
             lng,
             status: "OPEN",
@@ -2953,6 +3322,7 @@ export default function Page() {
                   : "PATROL";
             const station = nextAiStations
               .slice()
+              .filter((candidate) => candidate.countryCode === mission.countryCode)
               .sort(
                 (a, b) =>
                   haversineKm(a, mission) - haversineKm(b, mission),
@@ -2979,6 +3349,7 @@ export default function Page() {
                 homeLng: station.lng,
                 targetLat: mission.lat,
                 targetLng: mission.lng,
+                route: [],
               };
             });
             mission.status = "RESPONDING";
@@ -3123,6 +3494,13 @@ export default function Page() {
           ),
         );
         earnedThisTick = creditsEarned;
+        const aiCompanyCountries = current.unlockedCountryCodes.slice(0, 10);
+        const filteredAiStations = nextAiStations.filter((station) =>
+          aiCompanyCountries.includes(station.countryCode),
+        );
+        const filteredAiMissions = nextAiMissions.filter((mission) =>
+          aiCompanyCountries.includes(mission.countryCode),
+        );
 
         return {
           ...current,
@@ -3137,8 +3515,8 @@ export default function Page() {
           weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
           weatherCells: rotatedWeatherCells,
           civilianZones: rotatedCivilianZones,
-          aiStations: nextAiStations,
-          aiMissions: nextAiMissions,
+          aiStations: filteredAiStations,
+          aiMissions: filteredAiMissions,
           nextAiMissionId,
           nextAiStationId,
           aiBuildTimer: nextAiBuildTimer,
@@ -3166,7 +3544,7 @@ export default function Page() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [chooseIncidentTemplates, missionCatalog, pickIncidentLocation]);
+  }, [chooseIncidentTemplates, missionCatalog, pickIncidentLocation, pickOfficialAiSite]);
 
   const stationEmployees = useMemo(() => {
     if (game.stations.length === 0) return {} as Record<number, number>;
