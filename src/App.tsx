@@ -122,13 +122,31 @@ type AiStation = {
   type: StationType;
   lat: number;
   lng: number;
+  level: number;
+  budget: number;
   vehicles: {
     id: number;
     type: VehicleType;
-    available: boolean;
+    status: "AVAILABLE" | "DISPATCHED" | "ON_SCENE" | "RETURNING";
     eta: number;
+    totalEta: number;
     incidentId: number | null;
+    homeLat: number;
+    homeLng: number;
+    targetLat: number | null;
+    targetLng: number | null;
   }[];
+};
+
+type AiMission = {
+  id: number;
+  title: string;
+  category: IncidentCategory;
+  lat: number;
+  lng: number;
+  status: "OPEN" | "RESPONDING" | "RESOLVING" | "COMPLETE";
+  reward: number;
+  stageWorkRemaining: number;
 };
 
 type MissionDefinition = {
@@ -211,6 +229,11 @@ type GameState = {
   weatherCells: WeatherCell[];
   civilianZones: CivilianZone[];
   aiStations: AiStation[];
+  aiMissions: AiMission[];
+  nextAiMissionId: number;
+  nextAiStationId: number;
+  aiBuildTimer: number;
+  aiMissionTimer: number;
   market: {
     vehicleMultiplier: Record<VehicleType, number>;
     upgradeMultiplier: number;
@@ -231,6 +254,9 @@ const PAYROLL_PER_EMPLOYEE = 0;
 const COUNTRY_LICENSE_COST = 100000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
+const AI_STAGE_WORK_SECONDS = 18;
+const AI_BUILD_INTERVAL_SECONDS = 90;
+const AI_MISSION_INTERVAL_SECONDS = 24;
 const WEATHER_INTERVAL_SECONDS = 75;
 const WEATHER_CELL_INTERVAL_SECONDS = 45;
 const CIVILIAN_ZONE_INTERVAL_SECONDS = 35;
@@ -394,6 +420,11 @@ const initialState: GameState = {
   weatherCells: generateLocalizedWeatherCells("DE"),
   civilianZones: generateCivilianZones("DE"),
   aiStations: createAiStations("DE"),
+  aiMissions: [],
+  nextAiMissionId: 100000,
+  nextAiStationId: 4,
+  aiBuildTimer: AI_BUILD_INTERVAL_SECONDS,
+  aiMissionTimer: AI_MISSION_INTERVAL_SECONDS,
   market: {
     vehicleMultiplier: {
       ENGINE: 1,
@@ -526,7 +557,7 @@ function generateCivilianZones(countryCode: string): CivilianZone[] {
   }));
 }
 
-function createAiStations(countryCode: string): AiStation[] {
+function createAiStations(countryCode: string, anchor?: { lat: number; lng: number }): AiStation[] {
   const country = findCountry(countryCode);
   const stationTypes: StationType[] = ["FIRE", "EMS", "POLICE"];
   return stationTypes.map((type, index) => {
@@ -535,16 +566,25 @@ function createAiStations(countryCode: string): AiStation[] {
     const vehicles = Array.from({ length: 4 }, (_, vi) => ({
       id: index * 100 + vi + 1,
       type: vehiclePool[vi % vehiclePool.length],
-      available: true,
+      status: "AVAILABLE" as const,
       eta: 0,
+      totalEta: 0,
       incidentId: null,
+      homeLat: anchor ? anchor.lat + (Math.random() - 0.5) * 0.3 : country.center[1] + (Math.random() - 0.5) * 0.8,
+      homeLng: anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8,
+      targetLat: null,
+      targetLng: null,
     }));
+    const stationLat = anchor ? anchor.lat + (Math.random() - 0.5) * 0.3 : country.center[1] + (Math.random() - 0.5) * 0.8;
+    const stationLng = anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8;
     return {
       id: index + 1,
       name: `AI ${STATION_TYPES[type].label} HQ`,
       type,
-      lat: country.center[1] + (Math.random() - 0.5) * 0.8,
-      lng: country.center[0] + (Math.random() - 0.5) * 0.8,
+      lat: stationLat,
+      lng: stationLng,
+      level: 2,
+      budget: 160000,
       vehicles,
     };
   });
@@ -746,7 +786,30 @@ function loadGame(): GameState {
       missionDailySpawns: parsed.missionDailySpawns ?? {},
       weatherCells: parsed.weatherCells ?? generateLocalizedWeatherCells(activeCountryCode),
       civilianZones: parsed.civilianZones ?? generateCivilianZones(activeCountryCode),
-      aiStations: parsed.aiStations ?? createAiStations(activeCountryCode),
+      aiStations:
+        parsed.aiStations?.map((station) => ({
+          ...station,
+          level: station.level ?? 2,
+          budget: station.budget ?? 160000,
+          vehicles: station.vehicles.map((vehicle) => ({
+            ...vehicle,
+            status:
+              vehicle.status ??
+              ((vehicle as { available?: boolean }).available
+                ? "AVAILABLE"
+                : "DISPATCHED"),
+            totalEta: vehicle.totalEta ?? vehicle.eta ?? 0,
+            homeLat: vehicle.homeLat ?? station.lat,
+            homeLng: vehicle.homeLng ?? station.lng,
+            targetLat: vehicle.targetLat ?? null,
+            targetLng: vehicle.targetLng ?? null,
+          })),
+        })) ?? createAiStations(activeCountryCode),
+      aiMissions: parsed.aiMissions ?? [],
+      nextAiMissionId: parsed.nextAiMissionId ?? 100000,
+      nextAiStationId: parsed.nextAiStationId ?? 4,
+      aiBuildTimer: parsed.aiBuildTimer ?? AI_BUILD_INTERVAL_SECONDS,
+      aiMissionTimer: parsed.aiMissionTimer ?? AI_MISSION_INTERVAL_SECONDS,
       market: parsed.market ?? {
         vehicleMultiplier: {
           ENGINE: 1,
@@ -982,8 +1045,10 @@ export default function Page() {
   const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const aiStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
+  const aiMissionMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const civilianMarkerRefs = useRef<mapboxgl.Marker[]>([]);
   const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  const aiVehicleMarkerRefs = useRef<Map<string, mapboxgl.Marker>>(new Map());
   const vehicleProgressFloorRef = useRef<
     Map<
       number,
@@ -1396,6 +1461,10 @@ export default function Page() {
           nextStationId: id + 1,
           nextVehicleId,
           stations: [...current.stations, station],
+          aiStations:
+            isFirstStation
+              ? createAiStations(current.activeCountryCode, { lat, lng })
+              : current.aiStations,
           vehicles,
           log: [
             isFirstStation
@@ -1416,7 +1485,10 @@ export default function Page() {
         activeCountryCode: countryCode,
         weatherCells: generateLocalizedWeatherCells(countryCode),
         civilianZones: generateCivilianZones(countryCode),
-        aiStations: current.aiStations.length > 0 ? current.aiStations : createAiStations(countryCode),
+        aiStations:
+          current.aiStations.length > 0
+            ? current.aiStations
+            : createAiStations(countryCode),
         homeCountryCode:
           current.stations.length === 0 ? countryCode : current.homeCountryCode,
         unlockedCountryCodes: current.unlockedCountryCodes.includes(countryCode)
@@ -1548,14 +1620,18 @@ export default function Page() {
       incidentMarkerRefs.current.forEach((marker) => marker.remove());
       realStationMarkerRefs.current.forEach((marker) => marker.remove());
       aiStationMarkerRefs.current.forEach((marker) => marker.remove());
+      aiMissionMarkerRefs.current.forEach((marker) => marker.remove());
       civilianMarkerRefs.current.forEach((marker) => marker.remove());
       vehicleMarkerRefs.current.forEach((marker) => marker.remove());
+      aiVehicleMarkerRefs.current.forEach((marker) => marker.remove());
       stationMarkerRefs.current = [];
       incidentMarkerRefs.current = [];
       realStationMarkerRefs.current = [];
       aiStationMarkerRefs.current = [];
+      aiMissionMarkerRefs.current = [];
       civilianMarkerRefs.current = [];
       vehicleMarkerRefs.current.clear();
+      aiVehicleMarkerRefs.current.clear();
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -1804,11 +1880,13 @@ export default function Page() {
     incidentMarkerRefs.current.forEach((marker) => marker.remove());
     realStationMarkerRefs.current.forEach((marker) => marker.remove());
     aiStationMarkerRefs.current.forEach((marker) => marker.remove());
+    aiMissionMarkerRefs.current.forEach((marker) => marker.remove());
     civilianMarkerRefs.current.forEach((marker) => marker.remove());
     stationMarkerRefs.current = [];
     incidentMarkerRefs.current = [];
     realStationMarkerRefs.current = [];
     aiStationMarkerRefs.current = [];
+    aiMissionMarkerRefs.current = [];
     civilianMarkerRefs.current = [];
 
     game.stations.forEach((station) => {
@@ -1939,6 +2017,56 @@ export default function Page() {
       );
     });
 
+    const activeAiVehicleKeys = new Set<string>();
+    game.aiStations.forEach((station) => {
+      station.vehicles.forEach((vehicle) => {
+        if (
+          vehicle.status === "AVAILABLE" ||
+          vehicle.targetLat === null ||
+          vehicle.targetLng === null
+        ) {
+          return;
+        }
+        const key = `${station.id}-${vehicle.id}`;
+        activeAiVehicleKeys.add(key);
+        const total = Math.max(vehicle.totalEta, 1);
+        const legProgress = 1 - Math.max(vehicle.eta, 0) / total;
+        const clamped = Math.min(1, Math.max(0, legProgress));
+        const from =
+          vehicle.status === "RETURNING"
+            ? { lat: vehicle.targetLat, lng: vehicle.targetLng }
+            : { lat: vehicle.homeLat, lng: vehicle.homeLng };
+        const to =
+          vehicle.status === "RETURNING"
+            ? { lat: vehicle.homeLat, lng: vehicle.homeLng }
+            : { lat: vehicle.targetLat, lng: vehicle.targetLng };
+        const lat = from.lat + (to.lat - from.lat) * clamped;
+        const lng = from.lng + (to.lng - from.lng) * clamped;
+
+        const existing = aiVehicleMarkerRefs.current.get(key);
+        if (existing) {
+          existing.setLngLat([lng, lat]);
+          return;
+        }
+
+        const el = document.createElement("div");
+        el.className = "flex h-7 w-7 items-center justify-center rounded-full border border-indigo-100 bg-indigo-500/95 text-xs text-white shadow";
+        el.title = `AI ${VEHICLE_TYPES[vehicle.type].label}`;
+        el.textContent = "🤖";
+        aiVehicleMarkerRefs.current.set(
+          key,
+          new mapboxgl.Marker({ element: el, anchor: "center" })
+            .setLngLat([lng, lat])
+            .addTo(mapRef.current!),
+        );
+      });
+    });
+    aiVehicleMarkerRefs.current.forEach((marker, key) => {
+      if (activeAiVehicleKeys.has(key)) return;
+      marker.remove();
+      aiVehicleMarkerRefs.current.delete(key);
+    });
+
     if (isSelectingRealStation) {
       realStations.forEach((site) => {
         const el = document.createElement("button");
@@ -1976,6 +2104,28 @@ export default function Page() {
       );
     });
 
+    game.aiMissions
+      .filter((mission) => mission.status !== "COMPLETE")
+      .forEach((mission) => {
+        const el = document.createElement("button");
+        el.className =
+          "flex h-7 w-7 items-center justify-center rounded-full border-2 border-indigo-100 bg-indigo-700 text-white shadow-lg";
+        el.title = `AI Mission: ${mission.title}`;
+        el.innerHTML = "🛰️";
+        el.onclick = () => {
+          mapRef.current?.flyTo({
+            center: [mission.lng, mission.lat],
+            zoom: Math.max(mapRef.current.getZoom(), 11),
+            essential: true,
+          });
+        };
+        aiMissionMarkerRefs.current.push(
+          new mapboxgl.Marker({ element: el, anchor: "center" })
+            .setLngLat([mission.lng, mission.lat])
+            .addTo(mapRef.current!),
+        );
+      });
+
     game.civilianZones.forEach((zone) => {
       const el = document.createElement("div");
       el.className = "flex h-6 w-6 items-center justify-center rounded-full border border-amber-300 bg-amber-600/90 text-[10px] text-white";
@@ -1991,6 +2141,7 @@ export default function Page() {
     activeIncidents,
     buildStationAt,
     game.aiStations,
+    game.aiMissions,
     game.civilianZones,
     game.incidents,
     game.stations,
@@ -2226,18 +2377,25 @@ export default function Page() {
         const missing = Math.max((needed[type] ?? 0) - (alreadyAssigned[type] ?? 0), 0);
         for (let i = 0; i < missing; i += 1) {
           const station = nextAiStations.find((item) =>
-            item.vehicles.some((vehicle) => vehicle.available && vehicle.type === type),
+            item.vehicles.some(
+              (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
+            ),
           );
           if (!station) continue;
           const aiVehicle = station.vehicles.find(
-            (vehicle) => vehicle.available && vehicle.type === type,
+            (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
           );
           if (!aiVehicle) continue;
           const km = haversineKm(station, incident);
           const eta = Math.max(10, Math.round((km / VEHICLE_TYPES[type].speedKmh) * 3600));
-          aiVehicle.available = false;
+          aiVehicle.status = "DISPATCHED";
           aiVehicle.eta = eta;
+          aiVehicle.totalEta = eta;
           aiVehicle.incidentId = incident.id;
+          aiVehicle.homeLat = station.lat;
+          aiVehicle.homeLng = station.lng;
+          aiVehicle.targetLat = incident.lat;
+          aiVehicle.targetLng = incident.lng;
           assignedUnits.push({
             id: aiVehicle.id,
             type,
@@ -2453,7 +2611,12 @@ export default function Page() {
         const nextAiStations = current.aiStations.map((station) => ({
           ...station,
           vehicles: station.vehicles.map((vehicle) => {
-            if (!vehicle.available && vehicle.eta > 0) {
+            if (
+              (vehicle.status === "DISPATCHED" ||
+                vehicle.status === "ON_SCENE" ||
+                vehicle.status === "RETURNING") &&
+              vehicle.eta > 0
+            ) {
               return { ...vehicle, eta: vehicle.eta - 1 };
             }
             return vehicle;
@@ -2567,9 +2730,12 @@ export default function Page() {
                   if (vehicle.incidentId !== nextIncident.id) return vehicle;
                   return {
                     ...vehicle,
-                    available: true,
+                    status: "AVAILABLE",
                     eta: 0,
+                    totalEta: 0,
                     incidentId: null,
+                    targetLat: null,
+                    targetLng: null,
                   };
                 });
               });
@@ -2639,6 +2805,184 @@ export default function Page() {
             stageWorkTotal: STAGE_WORK_SECONDS,
           };
         });
+
+        let nextAiMissions = current.aiMissions.map((mission) => ({ ...mission }));
+        nextAiStations.forEach((station) => {
+          station.vehicles = station.vehicles.map((vehicle) => {
+            if (vehicle.status === "DISPATCHED" && vehicle.eta <= 0) {
+              return {
+                ...vehicle,
+                status: "ON_SCENE",
+                eta: AI_STAGE_WORK_SECONDS,
+                totalEta: AI_STAGE_WORK_SECONDS,
+              };
+            }
+            if (vehicle.status === "ON_SCENE" && vehicle.eta <= 0) {
+              return {
+                ...vehicle,
+                status: "RETURNING",
+                eta: Math.max(vehicle.totalEta, 1),
+                totalEta: Math.max(vehicle.totalEta, 1),
+              };
+            }
+            if (vehicle.status === "RETURNING" && vehicle.eta <= 0) {
+              return {
+                ...vehicle,
+                status: "AVAILABLE",
+                eta: 0,
+                totalEta: 0,
+                incidentId: null,
+                targetLat: null,
+                targetLng: null,
+              };
+            }
+            return vehicle;
+          });
+        });
+
+        nextAiMissions = nextAiMissions.map((mission) => {
+          if (mission.status === "COMPLETE") return mission;
+          const assignedUnits = nextAiStations.flatMap((station) =>
+            station.vehicles.filter((vehicle) => vehicle.incidentId === mission.id),
+          );
+          const hasDispatched = assignedUnits.some((unit) => unit.status === "DISPATCHED");
+          const hasOnScene = assignedUnits.some((unit) => unit.status === "ON_SCENE");
+          const hasReturning = assignedUnits.some((unit) => unit.status === "RETURNING");
+
+          if (mission.status === "OPEN" && hasDispatched) {
+            return { ...mission, status: "RESPONDING" };
+          }
+          if (hasOnScene) {
+            return {
+              ...mission,
+              status: "RESOLVING",
+              stageWorkRemaining: Math.max(mission.stageWorkRemaining - 1, 0),
+            };
+          }
+          if (mission.status === "RESOLVING" && mission.stageWorkRemaining <= 0 && !hasDispatched && !hasOnScene) {
+            return { ...mission, status: hasReturning ? "RESOLVING" : "COMPLETE", stageWorkRemaining: 0 };
+          }
+          if (mission.status === "RESPONDING" && !hasDispatched && !hasOnScene && !hasReturning) {
+            return { ...mission, status: "COMPLETE", stageWorkRemaining: 0 };
+          }
+          return mission;
+        });
+
+        const completedAiMissionIds = new Set(
+          nextAiMissions.filter((mission) => mission.status === "COMPLETE").map((mission) => mission.id),
+        );
+        if (completedAiMissionIds.size > 0) {
+          nextAiStations.forEach((station) => {
+            const completedByStation = station.vehicles.filter(
+              (vehicle) => vehicle.incidentId !== null && completedAiMissionIds.has(vehicle.incidentId),
+            ).length;
+            if (completedByStation > 0) {
+              station.budget += completedByStation * 2500;
+            }
+          });
+        }
+
+        let nextAiStationId = current.nextAiStationId;
+        let nextAiMissionId = current.nextAiMissionId;
+        let nextAiBuildTimer = current.aiBuildTimer - 1;
+        let nextAiMissionTimer = current.aiMissionTimer - 1;
+
+        if (current.stations.length > 0 && nextAiBuildTimer <= 0) {
+          const anchorStation = current.stations[rand(0, current.stations.length - 1)];
+          const type: StationType = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as StationType;
+          const vehiclePool: VehicleType[] =
+            type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
+          const lat = anchorStation.lat + (Math.random() - 0.5) * 0.35;
+          const lng = anchorStation.lng + (Math.random() - 0.5) * 0.35;
+          const stationId = nextAiStationId;
+          nextAiStations.push({
+            id: stationId,
+            name: `AI ${STATION_TYPES[type].label} Forward ${stationId}`,
+            type,
+            lat,
+            lng,
+            level: 1,
+            budget: 80000,
+            vehicles: Array.from({ length: 2 }, (_, vi) => ({
+              id: stationId * 100 + vi + 1,
+              type: vehiclePool[vi % vehiclePool.length],
+              status: "AVAILABLE",
+              eta: 0,
+              totalEta: 0,
+              incidentId: null,
+              homeLat: lat,
+              homeLng: lng,
+              targetLat: null,
+              targetLng: null,
+            })),
+          });
+          nextAiStationId += 1;
+          nextAiBuildTimer = AI_BUILD_INTERVAL_SECONDS;
+          progressNotes.unshift(`AI expanded with a new ${STATION_TYPES[type].label.toLowerCase()} station near your network.`);
+        }
+
+        if (current.stations.length > 0 && nextAiMissionTimer <= 0) {
+          const anchor = current.stations[rand(0, current.stations.length - 1)];
+          const category: IncidentCategory = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as IncidentCategory;
+          const missionId = nextAiMissionId;
+          const lat = anchor.lat + (Math.random() - 0.5) * 0.28;
+          const lng = anchor.lng + (Math.random() - 0.5) * 0.28;
+          const aiMission: AiMission = {
+            id: missionId,
+            title: `AI ${category} mission #${missionId}`,
+            category,
+            lat,
+            lng,
+            status: "OPEN",
+            reward: rand(1200, 4200),
+            stageWorkRemaining: AI_STAGE_WORK_SECONDS,
+          };
+          nextAiMissions = [...nextAiMissions, aiMission].slice(-20);
+          nextAiMissionId += 1;
+          nextAiMissionTimer = AI_MISSION_INTERVAL_SECONDS;
+        }
+
+        nextAiMissions
+          .filter((mission) => mission.status === "OPEN")
+          .forEach((mission) => {
+            const neededType: VehicleType =
+              mission.category === "FIRE"
+                ? "ENGINE"
+                : mission.category === "EMS"
+                  ? "AMBULANCE"
+                  : "PATROL";
+            const station = nextAiStations
+              .slice()
+              .sort(
+                (a, b) =>
+                  haversineKm(a, mission) - haversineKm(b, mission),
+              )
+              .find((candidate) =>
+                candidate.vehicles.some(
+                  (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === neededType,
+                ),
+              );
+            if (!station) return;
+            station.vehicles = station.vehicles.map((vehicle) => {
+              if (!(vehicle.status === "AVAILABLE" && vehicle.type === neededType)) {
+                return vehicle;
+              }
+              const km = haversineKm(station, mission);
+              const eta = Math.max(8, Math.round((km / VEHICLE_TYPES[vehicle.type].speedKmh) * 3600));
+              return {
+                ...vehicle,
+                status: "DISPATCHED",
+                eta,
+                totalEta: eta,
+                incidentId: mission.id,
+                homeLat: station.lat,
+                homeLng: station.lng,
+                targetLat: mission.lat,
+                targetLng: mission.lng,
+              };
+            });
+            mission.status = "RESPONDING";
+          });
 
         const activeCount = nextIncidents.filter(
           (incident) => incident.status !== "COMPLETE",
@@ -2794,6 +3138,11 @@ export default function Page() {
           weatherCells: rotatedWeatherCells,
           civilianZones: rotatedCivilianZones,
           aiStations: nextAiStations,
+          aiMissions: nextAiMissions,
+          nextAiMissionId,
+          nextAiStationId,
+          aiBuildTimer: nextAiBuildTimer,
+          aiMissionTimer: nextAiMissionTimer,
           market: nextMarket,
           missionDailySpawns: nextMissionDailySpawns,
           nextIncidentId,
