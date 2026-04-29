@@ -28,6 +28,14 @@ type VehicleLike = {
   status: VehicleStatus;
 };
 
+type RouteOption = {
+  key: string;
+  label: string;
+  color: string;
+  distanceKm: number;
+  etaSeconds: number;
+};
+
 type MissionProgress = {
   eta: number;
   mission: number;
@@ -46,7 +54,8 @@ type Props = {
   dispatchCost: number;
   onFocusIncident: (incident: IncidentLike) => void;
   onDispatchSuggested: (incident: IncidentLike) => void;
-  onDispatchVehicle: (vehicleId: number, incidentId: number) => void;
+  onDispatchVehicle: (vehicleId: number, incidentId: number, routeKey?: string) => void;
+  onLoadRouteOptions: (vehicleId: number, incidentId: number) => Promise<RouteOption[]>;
 };
 
 function Badge({
@@ -81,9 +90,12 @@ export function LiveIncidentsPanel({
   onFocusIncident,
   onDispatchSuggested,
   onDispatchVehicle,
+  onLoadRouteOptions,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
+  const [routeChoices, setRouteChoices] = useState<Record<number, RouteOption[]>>({});
+  const [selectedRoutes, setSelectedRoutes] = useState<Record<number, string>>({});
 
   const dispatchIncident = useMemo(
     () =>
@@ -94,6 +106,17 @@ export function LiveIncidentsPanel({
   const availableVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE"),
     [vehicles],
+  );
+
+
+  const sortedIncidents = useMemo(
+    () =>
+      [...activeIncidents].sort((a, b) => {
+        const byStatus = Number(a.status === "RESPONDING") - Number(b.status === "RESPONDING");
+        if (byStatus !== 0) return byStatus;
+        return b.id - a.id;
+      }),
+    [activeIncidents],
   );
 
   const getCardProgressFillClass = (colorClass: string) => {
@@ -109,9 +132,14 @@ export function LiveIncidentsPanel({
       {activeIncidents.length === 0 ? (
         <p className="text-xs text-slate-400">No active incidents.</p>
       ) : (
-        activeIncidents.map((incident) => {
+        sortedIncidents.map((incident) => {
           const stage = incident.stages[incident.currentStage];
           const progress = missionProgress(incident);
+          const completionClass = progress.overall >= 0.85
+            ? "ring-1 ring-emerald-500/50"
+            : progress.overall >= 0.45
+              ? "ring-1 ring-amber-500/40"
+              : "";
           return (
             <div
               key={incident.id}
@@ -119,7 +147,7 @@ export function LiveIncidentsPanel({
                 focusedIncidentId === incident.id
                   ? "border-sky-500/80 bg-sky-950/40"
                   : "border-slate-700 bg-slate-900/90"
-              }`}
+              } ${completionClass}`}
             >
               <div
                 className={`pointer-events-none absolute inset-y-0 left-0 transition-all ${getCardProgressFillClass(progress.colorClass)}`}
@@ -148,6 +176,8 @@ export function LiveIncidentsPanel({
                   onClick={() => {
                     setDispatchIncidentId(incident.id);
                     setSelectedVehicleIds([]);
+                    setRouteChoices({});
+                    setSelectedRoutes({});
                   }}
                   disabled={availableVehicles.length === 0}
                 >
@@ -202,13 +232,18 @@ export function LiveIncidentsPanel({
                     <button
                       key={vehicle.id}
                       type="button"
-                      onClick={() =>
-                        setSelectedVehicleIds((current) =>
-                          selected
-                            ? current.filter((id) => id !== vehicle.id)
-                            : [...current, vehicle.id],
-                        )
-                      }
+                      onClick={async () => {
+                        if (selected) {
+                          setSelectedVehicleIds((current) => current.filter((id) => id !== vehicle.id));
+                          return;
+                        }
+                        setSelectedVehicleIds((current) => [...current, vehicle.id]);
+                        const options = await onLoadRouteOptions(vehicle.id, dispatchIncident.id);
+                        setRouteChoices((current) => ({ ...current, [vehicle.id]: options }));
+                        if (options[0]) {
+                          setSelectedRoutes((current) => ({ ...current, [vehicle.id]: options[0].key }));
+                        }
+                      }}
                       className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs transition ${
                         selected
                           ? "border-sky-500 bg-sky-500/15 text-sky-100"
@@ -224,6 +259,28 @@ export function LiveIncidentsPanel({
                   );
                 })
               )}
+              {selectedVehicleIds.map((vehicleId) => {
+                const options = routeChoices[vehicleId] ?? [];
+                if (options.length === 0) return null;
+                return (
+                  <div key={vehicleId} className="rounded border border-slate-700 p-2">
+                    <p className="mb-1 text-[10px] text-slate-300">Route for vehicle #{vehicleId}</p>
+                    <div className="space-y-1">
+                      {options.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          onClick={() => setSelectedRoutes((current) => ({ ...current, [vehicleId]: option.key }))}
+                          className={`flex w-full items-center justify-between rounded border px-2 py-1 text-[10px] ${selectedRoutes[vehicleId] === option.key ? "border-sky-500 bg-sky-500/10" : "border-slate-700 bg-slate-900"}`}
+                        >
+                          <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: option.color }} />{option.label}</span>
+                          <span>{option.distanceKm.toFixed(1)} km • {option.etaSeconds}s</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
             <Button
@@ -231,7 +288,7 @@ export function LiveIncidentsPanel({
               disabled={selectedVehicleIds.length === 0 || credits < dispatchCost}
               onClick={() => {
                 selectedVehicleIds.forEach((vehicleId) => {
-                  onDispatchVehicle(vehicleId, dispatchIncident.id);
+                  onDispatchVehicle(vehicleId, dispatchIncident.id, selectedRoutes[vehicleId]);
                 });
                 setDispatchIncidentId(null);
                 setSelectedVehicleIds([]);

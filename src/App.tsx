@@ -628,12 +628,13 @@ async function fetchRoadRoute(
   start: { lat: number; lng: number },
   end: { lat: number; lng: number },
   token?: string,
+  includeAlternatives = false,
 ) {
   if (!token) return null;
 
   const path = `${start.lng},${start.lat};${end.lng},${end.lat}`;
   const params = new URLSearchParams({
-    alternatives: "false",
+    alternatives: includeAlternatives ? "true" : "false",
     geometries: "geojson",
     overview: "full",
     steps: "false",
@@ -652,15 +653,19 @@ async function fetchRoadRoute(
         geometry?: { coordinates?: [number, number][] };
       }[];
     };
-    const route = data.routes?.[0];
-    const coordinates = route?.geometry?.coordinates;
+    const routes = (data.routes ?? [])
+      .map((route) => {
+        const coordinates = route.geometry?.coordinates;
+        if (!coordinates || coordinates.length < 2) return null;
+        return {
+          distanceKm: route.distance / 1000,
+          coordinates,
+        };
+      })
+      .filter((route): route is { distanceKm: number; coordinates: [number, number][] } => Boolean(route));
 
-    if (!route || !coordinates || coordinates.length < 2) return null;
-
-    return {
-      distanceKm: route.distance / 1000,
-      coordinates,
-    };
+    if (routes.length === 0) return null;
+    return includeAlternatives ? routes : routes[0];
   } catch {
     return null;
   }
@@ -1408,7 +1413,8 @@ export default function Page() {
         const station = game.stations.find((s) => s.id === vehicle.stationId);
         const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
         if (!station || !incident) return null;
-        const route = await fetchRoadRoute(incident, station, mapToken);
+        const rawRoute = await fetchRoadRoute(incident, station, mapToken, false);
+        const route = Array.isArray(rawRoute) ? rawRoute[0] : rawRoute;
         if (!route) return null;
         return {
           vehicleId: vehicle.id,
@@ -1750,7 +1756,7 @@ export default function Page() {
     [missionCatalog],
   );
 
-  async function dispatch(vehicleId: number, incidentId: number) {
+  async function dispatch(vehicleId: number, incidentId: number, routeKey?: string) {
     const vehicle = game.vehicles.find((v) => v.id === vehicleId);
     const incident = game.incidents.find((i) => i.id === incidentId);
     if (!vehicle || !incident) return;
@@ -1758,7 +1764,12 @@ export default function Page() {
     const station = game.stations.find((s) => s.id === vehicle.stationId);
     if (!station) return;
 
-    const route = await fetchRoadRoute(station, incident, mapToken);
+    const routeOptions = await fetchRoadRoute(station, incident, mapToken, true);
+    const selectedOption =
+      Array.isArray(routeOptions) && routeKey
+        ? routeOptions.find((_, idx) => `route-${idx + 1}` === routeKey)
+        : null;
+    const route = selectedOption ?? (Array.isArray(routeOptions) ? routeOptions[0] : routeOptions);
     const km = route?.distanceKm ?? haversineKm(station, incident);
     const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
     const traffic = getRushHourModifier();
@@ -1828,6 +1839,34 @@ export default function Page() {
         ].slice(0, 10),
       };
     });
+  }
+
+  async function loadRouteOptions(vehicleId: number, incidentId: number) {
+    const vehicle = game.vehicles.find((entry) => entry.id === vehicleId);
+    const incident = game.incidents.find((entry) => entry.id === incidentId);
+    if (!vehicle || !incident) return [];
+    const station = game.stations.find((entry) => entry.id === vehicle.stationId);
+    if (!station) return [];
+
+    const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
+    const traffic = getRushHourModifier();
+    const dispatchUpgrade = 1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
+    const speed =
+      VEHICLE_TYPES[vehicle.type].speedKmh *
+      weatherMultiplier *
+      traffic.trafficMultiplier *
+      dispatchUpgrade;
+    const colors = ["#ef4444", "#22c55e", "#3b82f6"];
+
+    const routeOptions = await fetchRoadRoute(station, incident, mapToken, true);
+    if (!Array.isArray(routeOptions)) return [];
+    return routeOptions.slice(0, 3).map((route, idx) => ({
+      key: `route-${idx + 1}`,
+      label: `Route ${idx + 1}`,
+      color: colors[idx] ?? "#a855f7",
+      distanceKm: route.distanceKm,
+      etaSeconds: Math.max(8, Math.round((route.distanceKm / speed) * 3600)),
+    }));
   }
 
   async function dispatchRequiredVehicles(incident: Incident) {
@@ -2757,6 +2796,7 @@ export default function Page() {
           dispatchRequiredVehicles(incident as Incident)
         }
         onDispatchVehicle={dispatch}
+        onLoadRouteOptions={loadRouteOptions}
       />
     </main>
   );
