@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "dev:bg": "nohup npm run dev > .vite-dev.log 2>&1 & echo $! > .vite-dev.pid && echo \"Vite started in background (PID $(cat .vite-dev.pid)). Logs: .vite-dev.log\"",
+    "dev:stop": "if [ -f .vite-dev.pid ]; then kill $(cat .vite-dev.pid) && rm .vite-dev.pid && echo \"Stopped Vite background process.\"; else echo \"No .vite-dev.pid found.\"; fi"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

@@ -1947,7 +1947,12 @@ export default function Page() {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      lastVehicleTickAtRef.current = Date.now();
+      const now = Date.now();
+      const elapsedTicks = Math.max(
+        1,
+        Math.floor((now - lastVehicleTickAtRef.current) / 1000),
+      );
+      lastVehicleTickAtRef.current = now;
       const spawnedNotifications: IncidentNotification[] = [];
       let earnedThisTick = 0;
       setGame((current) => {
@@ -1962,7 +1967,7 @@ export default function Page() {
           ) {
             return {
               ...vehicle,
-              eta: vehicle.eta - 1,
+              eta: Math.max(vehicle.eta - elapsedTicks, 0),
             };
           }
 
@@ -2018,7 +2023,10 @@ export default function Page() {
           if (nextIncident.stageWorkRemaining > 0) {
             return {
               ...nextIncident,
-              stageWorkRemaining: nextIncident.stageWorkRemaining - 1,
+              stageWorkRemaining: Math.max(
+                nextIncident.stageWorkRemaining - elapsedTicks,
+                0,
+              ),
             };
           }
 
@@ -2080,7 +2088,7 @@ export default function Page() {
                 (vehicle.status === "AVAILABLE" && vehicle.incidentId === null),
             );
             const nextFiling = allBackAtStation
-              ? Math.max(nextIncident.filingRemaining - 1, 0)
+              ? Math.max(nextIncident.filingRemaining - elapsedTicks, 0)
               : nextIncident.filingRemaining;
             if (allBackAtStation && nextFiling === 0) {
               const missionCrewCost = assignedVehicles.reduce(
@@ -2220,7 +2228,7 @@ export default function Page() {
           }
         }
 
-        const nextWeatherTimer = current.weatherTimer - 1;
+        const nextWeatherTimer = current.weatherTimer - elapsedTicks;
         const weatherChanged = nextWeatherTimer <= 0;
         const weatherPool: GameState["weather"][] = ["CLEAR", "RAIN", "SNOW", "HEAT"];
         const nextWeather = weatherChanged
