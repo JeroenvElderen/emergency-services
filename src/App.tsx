@@ -642,42 +642,21 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
   });
 }
 
-function clampToCountryBounds(
-  point: { lat: number; lng: number },
-  countryCode: string,
-) {
-  const country = findCountry(countryCode);
-  return {
-    lat: Math.min(country.bounds.maxLat, Math.max(country.bounds.minLat, point.lat)),
-    lng: Math.min(country.bounds.maxLng, Math.max(country.bounds.minLng, point.lng)),
-  };
-}
 
-function randomSpawnNearAnchor(
-  anchor: { lat: number; lng: number },
-  countryCode: string,
-  minOffsetKm: number,
-  maxOffsetKm: number,
-  blocked: { lat: number; lng: number }[] = [],
-) {
-  const kmToDegrees = 1 / 111;
-  for (let i = 0; i < 12; i += 1) {
-    const distanceKm = minOffsetKm + Math.random() * (maxOffsetKm - minOffsetKm);
-    const angle = Math.random() * Math.PI * 2;
-    const point = clampToCountryBounds(
-      {
-        lat: anchor.lat + Math.sin(angle) * distanceKm * kmToDegrees,
-        lng: anchor.lng + Math.cos(angle) * distanceKm * kmToDegrees,
-      },
-      countryCode,
-    );
-    const overlapsBlocked = blocked.some((location) => haversineKm(location, point) < 0.35);
-    if (!overlapsBlocked) return point;
-  }
-  return clampToCountryBounds(
-    { lat: anchor.lat + 0.02, lng: anchor.lng + 0.02 },
-    countryCode,
-  );
+function aiCandidateLocations(countryCode: string): AiCompanyLocation[] {
+  const country = findCountry(countryCode);
+  const official = OFFICIAL_AI_COMPANIES[countryCode] ?? [
+    { name: `${country.name} Central Emergency Coordination`, lat: country.center[1] + 0.15, lng: country.center[0] - 0.15 },
+    { name: `${country.name} Regional Civil Protection`, lat: country.center[1] - 0.15, lng: country.center[0] + 0.15 },
+  ];
+
+  return [
+    ...official,
+    { name: `${country.name} North Response`, lat: country.center[1] + 0.28, lng: country.center[0] },
+    { name: `${country.name} South Response`, lat: country.center[1] - 0.28, lng: country.center[0] },
+    { name: `${country.name} East Response`, lat: country.center[1], lng: country.center[0] + 0.28 },
+    { name: `${country.name} West Response`, lat: country.center[1], lng: country.center[0] - 0.28 },
+  ];
 }
 
 function stationCapacity(station: Pick<Station, "level" | "upgrades">) {
@@ -3092,20 +3071,31 @@ export default function Page() {
         let nextAiMissionTimer = current.aiMissionTimer - 1;
 
         if (current.stations.length > 0 && nextAiBuildTimer <= 0) {
-          const anchorStation = current.stations[rand(0, current.stations.length - 1)];
           const type: StationType = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as StationType;
           const vehiclePool: VehicleType[] =
             type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
-          const blockedLocations = current.stations.map((station) => ({ lat: station.lat, lng: station.lng }));
-          const spawn = randomSpawnNearAnchor(
-            anchorStation,
-            current.activeCountryCode,
-            0.6,
-            14,
-            blockedLocations,
+          const candidateLocations = aiCandidateLocations(current.activeCountryCode).filter(
+            (location) =>
+              !current.stations.some((station) => haversineKm(station, location) < 0.2) &&
+              !nextAiStations.some((aiStation) => haversineKm(aiStation, location) < 0.2),
           );
-          const lat = spawn.lat;
-          const lng = spawn.lng;
+          if (candidateLocations.length === 0) {
+            nextAiBuildTimer = AI_BUILD_INTERVAL_SECONDS;
+            return {
+              ...current,
+              aiStations: nextAiStations,
+              aiMissions: nextAiMissions,
+              incidents: nextIncidents,
+              nextAiStationId,
+              nextAiMissionId,
+              aiBuildTimer: nextAiBuildTimer,
+              aiMissionTimer: nextAiMissionTimer,
+              log: ["AI could not expand: no free real-world station locations available.", ...progressNotes, ...current.log].slice(0, 10),
+            };
+          }
+          const placement = candidateLocations[rand(0, candidateLocations.length - 1)];
+          const lat = placement.lat;
+          const lng = placement.lng;
           const stationId = nextAiStationId;
           nextAiStations.push({
             id: stationId,
@@ -3135,18 +3125,17 @@ export default function Page() {
         }
 
         if (current.stations.length > 0 && nextAiMissionTimer <= 0) {
-          const anchor = current.stations[rand(0, current.stations.length - 1)];
           const category: IncidentCategory = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as IncidentCategory;
           const missionId = nextAiMissionId;
-          const spawn = randomSpawnNearAnchor(
-            anchor,
-            current.activeCountryCode,
-            0.4,
-            10,
-            current.stations.map((station) => ({ lat: station.lat, lng: station.lng })),
+          const missionCandidates = aiCandidateLocations(current.activeCountryCode).filter(
+            (location) => !current.stations.some((station) => haversineKm(station, location) < 0.2),
           );
-          const lat = spawn.lat;
-          const lng = spawn.lng;
+          const missionAnchor =
+            missionCandidates.length > 0
+              ? missionCandidates[rand(0, missionCandidates.length - 1)]
+              : aiCandidateLocations(current.activeCountryCode)[0];
+          const lat = missionAnchor.lat;
+          const lng = missionAnchor.lng;
           const aiMission: AiMission = {
             id: missionId,
             title: `AI ${category} mission #${missionId}`,
