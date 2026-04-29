@@ -1138,13 +1138,27 @@ export default function Page() {
   }, []);
 
   const pickIncidentLocation = useCallback(
-    (station: Station) => {
+    (station: Station, stations: Station[]) => {
       const map = mapRef.current;
       const maxOffset = 0.04;
       const maxAttempts = 25;
+      const minStationDistanceKm = 0.2;
+
+      const isTooCloseToStation = (lat: number, lng: number) =>
+        stations.some(
+          (entry) =>
+            haversineKm(
+              { lat, lng },
+              { lat: entry.lat, lng: entry.lng },
+            ) < minStationDistanceKm,
+        );
 
       if (!map || !map.isStyleLoaded()) {
-        return { lat: station.lat, lng: station.lng };
+        const fallbackLat = station.lat + maxOffset / 2;
+        const fallbackLng = station.lng + maxOffset / 2;
+        return isTooCloseToStation(fallbackLat, fallbackLng)
+          ? { lat: station.lat - maxOffset / 2, lng: station.lng - maxOffset / 2 }
+          : { lat: fallbackLat, lng: fallbackLng };
       }
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -1152,10 +1166,10 @@ export default function Page() {
         const lng = station.lng + (Math.random() - 0.5) * maxOffset;
         const rendered = map.queryRenderedFeatures(map.project([lng, lat]));
         const intersectsWater = rendered.some(isWaterFeature);
-        if (!intersectsWater) return { lat, lng };
+        if (!intersectsWater && !isTooCloseToStation(lat, lng)) return { lat, lng };
       }
 
-      return { lat: station.lat, lng: station.lng };
+      return { lat: station.lat + maxOffset / 2, lng: station.lng - maxOffset / 2 };
     },
     [isWaterFeature],
   );
@@ -2399,7 +2413,7 @@ export default function Page() {
                 (nextResolvedCount + current.stations.length) / 4,
               );
             const { lat, lng } =
-              template.fixedLocation ?? pickIncidentLocation(station);
+              template.fixedLocation ?? pickIncidentLocation(station, current.stations);
             const incident: Incident = {
               id: nextIncidentId,
               missionId: template.id,
