@@ -540,6 +540,28 @@ function meetsMissionPrerequisites(
   return true;
 }
 
+function stationSupportsRequiredTypes(
+  station: Station,
+  requiredTypes: VehicleType[],
+  vehicles: Vehicle[],
+) {
+  const requiredCounts = requirementCounts(requiredTypes);
+  const stationVehicleCounts = vehicles
+    .filter((vehicle) => vehicle.stationId === station.id)
+    .reduce(
+      (counts, vehicle) => ({
+        ...counts,
+        [vehicle.type]: (counts[vehicle.type] ?? 0) + 1,
+      }),
+      {} as Partial<Record<VehicleType, number>>,
+    );
+
+  return Object.entries(requiredCounts).every(([type, count]) => {
+    const available = stationVehicleCounts[type as VehicleType] ?? 0;
+    return available >= (count ?? 0);
+  });
+}
+
 function findCountry(code: string) {
   return EU_COUNTRIES.find((country) => country.code === code) ?? EU_COUNTRIES[0];
 }
@@ -2171,9 +2193,30 @@ export default function Page() {
             nextIncidentId,
           });
           if (available.length > 0) {
+            const activeMissionIds = new Set(
+              finalIncidents
+                .filter((incident) => incident.status !== "COMPLETE")
+                .map((incident) => incident.missionId)
+                .filter((missionId): missionId is string => Boolean(missionId)),
+            );
+            const rotationPool = available.filter(
+              (template) => !activeMissionIds.has(template.id),
+            );
+            const templatePool = rotationPool.length > 0 ? rotationPool : available;
+            const template = templatePool[rand(0, templatePool.length - 1)];
+
+            const primaryStage = template.stages[0];
+            const candidateStations = current.stations.filter((station) =>
+              stationSupportsRequiredTypes(
+                station,
+                primaryStage?.required ?? [],
+                current.vehicles,
+              ),
+            );
+            const anchorStations =
+              candidateStations.length > 0 ? candidateStations : current.stations;
             const station =
-              current.stations[rand(0, current.stations.length - 1)];
-            const template = available[rand(0, available.length - 1)];
+              anchorStations[rand(0, anchorStations.length - 1)];
             const missionKey = `${current.activeCountryCode}:${template.id}`;
             const missionDef = missionCatalog.find((mission) => mission.id === template.id);
             const isSpecialMission = missionDef

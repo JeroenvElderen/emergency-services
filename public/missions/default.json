@@ -52,5 +52,23 @@
     ],
     "reward_floor": 364,
     "reward_ceiling": 910
+  },
+  {
+    "id": "4",
+    "name": "Small kitchen fire",
+    "average_credits": 140,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 336,
+    "reward_ceiling": 840
   }
 ]
