@@ -1368,7 +1368,7 @@ export default function Page() {
       attributionControl: false,
     });
 
-    const apply3dTerrain = () => {
+    const apply3dTerrainAndBuildings = () => {
       if (!mapRef.current) return;
       if (!mapRef.current.getSource("mapbox-dem")) {
         mapRef.current.addSource("mapbox-dem", {
@@ -1384,9 +1384,36 @@ export default function Page() {
         "high-color": "rgb(26, 56, 92)",
         "horizon-blend": 0.18,
       });
+
+      if (!mapRef.current.getLayer("3d-buildings")) {
+        const layers = mapRef.current.getStyle().layers ?? [];
+        const labelLayerId = layers.find(
+          (layer) =>
+            layer.type === "symbol" &&
+            typeof layer.layout?.["text-field"] !== "undefined",
+        )?.id;
+
+        mapRef.current.addLayer(
+          {
+            id: "3d-buildings",
+            source: "composite",
+            "source-layer": "building",
+            filter: ["==", ["get", "extrude"], "true"],
+            type: "fill-extrusion",
+            minzoom: 14,
+            paint: {
+              "fill-extrusion-color": "#2f3d52",
+              "fill-extrusion-height": ["coalesce", ["get", "height"], 0],
+              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
+              "fill-extrusion-opacity": 0.65,
+            },
+          },
+          labelLayerId,
+        );
+      }
     };
 
-    mapRef.current.on("style.load", apply3dTerrain);
+    mapRef.current.on("style.load", apply3dTerrainAndBuildings);
     mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
     return () => {
