@@ -1,8 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import mapboxgl from "mapbox-gl";
-import "mapbox-gl/dist/mapbox-gl.css";
+import {
+  Cartesian3,
+  Color,
+  createWorldTerrainAsync,
+  Entity,
+  Ion,
+  Math as CesiumMath,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
+  Viewer,
+} from "cesium";
 import {
   Ambulance,
   Building2,
@@ -204,8 +213,8 @@ const WEATHER_EFFECTS: Record<
   SNOW: { speedMultiplier: 0.72, incidentMultiplier: 1.24, label: "Snow" },
   HEAT: { speedMultiplier: 0.9, incidentMultiplier: 1.12, label: "Heat" },
 };
-const MAPBOX_DIRECTIONS_BASE_URL =
-  "https://api.mapbox.com/directions/v5/mapbox/driving";
+const OPEN_ROUTE_SERVICE_BASE_URL =
+  "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
 
 const STATION_TYPES = {
   FIRE: { label: "Fire", icon: Flame },
@@ -818,11 +827,12 @@ export default function Page() {
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
   const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<mapboxgl.Map | null>(null);
-  const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
-  const incidentMarkerRefs = useRef<mapboxgl.Marker[]>([]);
-  const realStationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
-  const vehicleMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
+  const viewerRef = useRef<Viewer | null>(null);
+  const clickHandlerRef = useRef<ScreenSpaceEventHandler | null>(null);
+  const stationMarkerRefs = useRef<Entity[]>([]);
+  const incidentMarkerRefs = useRef<Entity[]>([]);
+  const realStationMarkerRefs = useRef<Entity[]>([]);
+  const vehicleMarkerRefs = useRef<Map<number, Entity>>(new Map());
   const vehicleProgressFloorRef = useRef<
     Map<
       number,
@@ -836,13 +846,10 @@ export default function Page() {
   >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
-  const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
-  const enableTerrain3D = import.meta.env.VITE_ENABLE_TERRAIN_3D === "true";
+  const directionsToken = import.meta.env.VITE_OPENROUTESERVICE_KEY as string | undefined;
+  const cesiumIonToken = import.meta.env.VITE_CESIUM_ION_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
-  const mapStyleUrl =
-    mapVisualStyle === "SATELLITE_3D"
-      ? "mapbox://styles/mapbox/satellite-streets-v12"
-      : "mapbox://styles/mapbox/dark-v11";
+  const mapStyleUrl = mapVisualStyle;
 
   const isWithinCountryBounds = useCallback(
     (lat: number, lng: number, countryCode: string) => {
@@ -1301,21 +1308,12 @@ export default function Page() {
   }, []);
 
   const loadRealStations = useCallback(async () => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const bounds = map.getBounds();
-    if (!bounds) return;
-    const zoom = map.getZoom();
-    const center = map.getCenter();
-    const south = bounds.getSouth().toFixed(4);
-    const west = bounds.getWest().toFixed(4);
-    const north = bounds.getNorth().toFixed(4);
-    const east = bounds.getEast().toFixed(4);
-    const aroundClause =
-      zoom < 7
-        ? `around:40000,${center.lat.toFixed(4)},${center.lng.toFixed(4)}`
-        : `${south},${west},${north},${east}`;
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const cameraPosition = viewer.camera.positionCartographic;
+    const centerLat = CesiumMath.toDegrees(cameraPosition.latitude);
+    const centerLng = CesiumMath.toDegrees(cameraPosition.longitude);
+    const aroundClause = `around:40000,${centerLat.toFixed(4)},${centerLng.toFixed(4)}`;
 
     const queryByType: Record<StationType, string[]> = {
       FIRE: [
@@ -1375,85 +1373,39 @@ export default function Page() {
   }, [selectedBuild]);
 
   useEffect(() => {
-    if (!mapContainerRef.current || !mapToken || mapRef.current) return;
+    if (!mapContainerRef.current || viewerRef.current) return;
+    if (cesiumIonToken) Ion.defaultAccessToken = cesiumIonToken;
 
-    mapboxgl.accessToken = mapToken;
+    const viewer = new Viewer(mapContainerRef.current, {
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: false,
+      sceneModePicker: false,
+      navigationHelpButton: false,
+      fullscreenButton: false,
+      infoBox: false,
+      selectionIndicator: false,
+    });
+    viewerRef.current = viewer;
 
-    mapRef.current = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: mapStyleUrl,
-      center: activeCountry.center,
-      zoom: activeCountry.zoom,
-      pitch: 58,
-      bearing: -20,
-      maxPitch: 85,
-      attributionControl: false,
+    void createWorldTerrainAsync().then((terrain) => {
+      if (viewerRef.current) viewerRef.current.scene.setTerrain(terrain);
     });
 
-    const setTerrainForViewport = () => {
-      if (!mapRef.current) return;
-
-      if (!enableTerrain3D) {
-        mapRef.current.setTerrain(null);
-        return;
-      }
-
-      if (!mapRef.current.getSource("mapbox-dem")) {
-        mapRef.current.addSource("mapbox-dem", {
-          type: "raster-dem",
-          url: "mapbox://mapbox.mapbox-terrain-dem-v1",
-          tileSize: 512,
-          maxzoom: 14,
-        });
-      }
-      
-      const center = mapRef.current.getCenter();
-      const centerFeatures = mapRef.current.queryRenderedFeatures(
-        mapRef.current.project([center.lng, center.lat]),
-      );
-      const centerIsWater = centerFeatures.some(isWaterFeature);
-
-      // Keep terrain in land views, but flatten sea-centric views so water stays level.
-      if (centerIsWater) {
-        mapRef.current.setTerrain(null);
-      } else {
-        mapRef.current.setTerrain({ source: "mapbox-dem", exaggeration: 1 });
-      }
-    };
-
-    const apply3dTerrainAndBuildings = () => {
-      if (!mapRef.current) return;
-      setTerrainForViewport();
-      mapRef.current.setFog({
-        color: "rgb(12, 18, 30)",
-        "high-color": "rgb(26, 56, 92)",
-        "horizon-blend": 0.18,
-      });
-
-    };
-
-    mapRef.current.on("style.load", apply3dTerrainAndBuildings);
-    mapRef.current.on("moveend", setTerrainForViewport);
+    const [lng, lat] = activeCountry.center;
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(lng, lat, 2500000),
+      duration: 1.2,
+    });
 
     return () => {
-      stationMarkerRefs.current.forEach((marker) => marker.remove());
-      incidentMarkerRefs.current.forEach((marker) => marker.remove());
-      realStationMarkerRefs.current.forEach((marker) => marker.remove());
-      vehicleMarkerRefs.current.forEach((marker) => marker.remove());
-      stationMarkerRefs.current = [];
-      incidentMarkerRefs.current = [];
-      realStationMarkerRefs.current = [];
-      vehicleMarkerRefs.current.clear();
-      mapRef.current?.off("moveend", setTerrainForViewport);
-      mapRef.current?.remove();
-      mapRef.current = null;
+      clickHandlerRef.current?.destroy();
+      viewer.destroy();
+      viewerRef.current = null;
     };
-  }, [activeCountry.center, activeCountry.zoom, enableTerrain3D, isWaterFeature, mapStyleUrl, mapToken, mapVisualStyle]);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.setStyle(mapStyleUrl);
-  }, [mapStyleUrl]);
+  }, [activeCountry.center, cesiumIonToken]);
 
   useEffect(() => {
     flyToCountry(game.activeCountryCode);
