@@ -216,8 +216,8 @@ export function LiveIncidentsPanel({
       </div>
 
       {dispatchIncident && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/55 p-3">
-          <div className="w-full max-w-md rounded-xl border border-sky-700/50 bg-slate-950/95 p-3 shadow-2xl">
+        <div className="absolute inset-x-0 bottom-0 z-40 flex justify-center p-3 pointer-events-none">
+          <div className="pointer-events-auto w-full max-w-2xl rounded-xl border border-sky-700/50 bg-slate-950/95 p-3 shadow-2xl">
             <div className="mb-2 flex items-start justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Dispatch vehicles</p>

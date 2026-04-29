@@ -1363,9 +1363,30 @@ export default function Page() {
       style: "mapbox://styles/mapbox/dark-v11",
       center: activeCountry.center,
       zoom: activeCountry.zoom,
+      pitch: 52,
+      bearing: -18,
       attributionControl: false,
     });
 
+    const apply3dTerrain = () => {
+      if (!mapRef.current) return;
+      if (!mapRef.current.getSource("mapbox-dem")) {
+        mapRef.current.addSource("mapbox-dem", {
+          type: "raster-dem",
+          url: "mapbox://mapbox.terrain-rgb",
+          tileSize: 512,
+          maxzoom: 14,
+        });
+      }
+      mapRef.current.setTerrain({ source: "mapbox-dem", exaggeration: 1.25 });
+      mapRef.current.setFog({
+        color: "rgb(12, 18, 30)",
+        "high-color": "rgb(26, 56, 92)",
+        "horizon-blend": 0.18,
+      });
+    };
+
+    mapRef.current.on("style.load", apply3dTerrain);
     mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
     return () => {
