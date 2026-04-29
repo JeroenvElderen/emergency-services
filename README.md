@@ -127,6 +127,18 @@ npm install
 npm run dev
 ```
 
+Run the dev server in the background:
+
+```bash
+npm run dev:bg
+```
+
+Stop the background server:
+
+```bash
+npm run dev:stop
+```
+
 Build:
 
 ```bash
