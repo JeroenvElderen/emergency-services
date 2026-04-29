@@ -820,7 +820,7 @@ export default function Page() {
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
-  const [mapVisualStyle, setMapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
+  const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -2633,7 +2633,7 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute left-3 top-3 z-30 flex max-w-[min(92vw,720px)] items-center gap-2 rounded-xl border border-slate-700/70 bg-slate-950/88 px-2.5 py-2 shadow-2xl backdrop-blur-sm">
+      <div className="absolute left-2 right-2 top-2 z-30 flex max-w-[min(96vw,820px)] flex-wrap items-center gap-1 rounded-xl border border-slate-700/70 bg-slate-950/88 px-2 py-1.5 text-[11px] shadow-2xl backdrop-blur-sm [&_button]:h-6 [&_button]:px-2 sm:left-3 sm:right-auto sm:top-3 sm:gap-2 sm:px-2.5 sm:py-2 sm:text-sm sm:[&_button]:h-7">
         <div className="relative">
           <Badge tone="good">
             <Coins className="mr-1 h-3 w-3" />
@@ -2674,33 +2674,9 @@ export default function Page() {
         >
           +
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => hireEmployee(1)}
-          disabled={game.credits < HIRING_COST}
-          title={`Hire 1 employee for ${HIRING_COST}`}
-        >
-          <UserPlus className="mr-1 h-3.5 w-3.5" />
-          Hire
-        </Button>
         <Button size="sm" variant="outline" onClick={resetGame}>
           Reset
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 px-2"
-          onClick={() =>
-            setMapVisualStyle((current) =>
-              current === "SATELLITE_3D" ? "DARK_3D" : "SATELLITE_3D",
-            )
-          }
-          title="Toggle map style"
-        >
-          {mapVisualStyle === "SATELLITE_3D" ? "Satellite" : "Dark"}
-        </Button>
-
         {buildPickerOpen && (
           <div className="absolute left-0 top-[calc(100%+0.5rem)] w-[280px] rounded-xl border border-slate-700 bg-slate-900/90 p-2">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
@@ -2881,7 +2857,7 @@ export default function Page() {
       )}
 
       {incidentNotifications.length > 0 && (
-        <div className="absolute bottom-3 left-3 z-30 w-[320px] space-y-2">
+        <div className="absolute left-2 right-2 top-[4.75rem] z-30 space-y-2 sm:left-3 sm:right-auto sm:top-auto sm:bottom-3 sm:w-[320px]">
           {incidentNotifications.map((notice) => (
             <div
               key={`${notice.id}-${notice.title}`}

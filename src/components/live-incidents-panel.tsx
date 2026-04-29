@@ -103,6 +103,7 @@ export function LiveIncidentsPanel({
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
   const [routeChoices, setRouteChoices] = useState<Record<number, RouteOption[]>>({});
   const [selectedRoutes, setSelectedRoutes] = useState<Record<number, string>>({});
+  const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
 
   const dispatchIncident = useMemo(
     () =>
@@ -157,8 +158,27 @@ export function LiveIncidentsPanel({
 
   return (
     <>
-      <div className="absolute bottom-3 right-3 z-30 max-h-[45vh] w-[min(96vw,1100px)] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2.5 shadow-2xl backdrop-blur-sm">
-      <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">Live Incidents</h2>
+      <Button
+        size="sm"
+        variant="outline"
+        className="absolute bottom-2 right-2 z-30 md:hidden"
+        onClick={() => setMobileBoardOpen((open) => !open)}
+      >
+        {mobileBoardOpen ? "Hide incidents" : `Incidents (${activeIncidents.length})`}
+      </Button>
+
+      <div className={`absolute bottom-2 left-2 right-2 z-30 max-h-[42vh] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-sm md:bottom-3 md:left-auto md:right-3 md:max-h-[45vh] md:w-[min(96vw,1100px)] md:p-2.5 ${mobileBoardOpen ? "block" : "hidden"} md:block`}>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">Live Incidents</h2>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 md:hidden"
+          onClick={() => setMobileBoardOpen(false)}
+        >
+          Close
+        </Button>
+      </div>
       {activeIncidents.length === 0 ? (
         <p className="text-xs text-slate-400">No active incidents.</p>
       ) : (
