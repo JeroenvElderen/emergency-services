@@ -34,6 +34,13 @@ type RouteOption = {
   color: string;
   distanceKm: number;
   etaSeconds: number;
+  coordinates: [number, number][];
+};
+
+type RoutePreview = {
+  incidentId: number;
+  routes: RouteOption[];
+  selectedRouteKey?: string;
 };
 
 type MissionProgress = {
@@ -56,6 +63,7 @@ type Props = {
   onDispatchSuggested: (incident: IncidentLike) => void;
   onDispatchVehicle: (vehicleId: number, incidentId: number, routeKey?: string) => void;
   onLoadRouteOptions: (vehicleId: number, incidentId: number) => Promise<RouteOption[]>;
+  onRoutePreviewChange: (preview: RoutePreview | null) => void;
 };
 
 function Badge({
@@ -91,6 +99,7 @@ export function LiveIncidentsPanel({
   onDispatchSuggested,
   onDispatchVehicle,
   onLoadRouteOptions,
+  onRoutePreviewChange,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
@@ -178,6 +187,7 @@ export function LiveIncidentsPanel({
                     setSelectedVehicleIds([]);
                     setRouteChoices({});
                     setSelectedRoutes({});
+                    onRoutePreviewChange(null);
                   }}
                   disabled={availableVehicles.length === 0}
                 >
@@ -235,6 +245,7 @@ export function LiveIncidentsPanel({
                       onClick={async () => {
                         if (selected) {
                           setSelectedVehicleIds((current) => current.filter((id) => id !== vehicle.id));
+                          onRoutePreviewChange(null);
                           return;
                         }
                         setSelectedVehicleIds((current) => [...current, vehicle.id]);
@@ -242,6 +253,11 @@ export function LiveIncidentsPanel({
                         setRouteChoices((current) => ({ ...current, [vehicle.id]: options }));
                         if (options[0]) {
                           setSelectedRoutes((current) => ({ ...current, [vehicle.id]: options[0].key }));
+                          onRoutePreviewChange({
+                            incidentId: dispatchIncident.id,
+                            routes: options,
+                            selectedRouteKey: options[0].key,
+                          });
                         }
                       }}
                       className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs transition ${
@@ -270,7 +286,14 @@ export function LiveIncidentsPanel({
                         <button
                           key={option.key}
                           type="button"
-                          onClick={() => setSelectedRoutes((current) => ({ ...current, [vehicleId]: option.key }))}
+                          onClick={() => {
+                            setSelectedRoutes((current) => ({ ...current, [vehicleId]: option.key }));
+                            onRoutePreviewChange({
+                              incidentId: dispatchIncident.id,
+                              routes: options,
+                              selectedRouteKey: option.key,
+                            });
+                          }}
                           className={`flex w-full items-center justify-between rounded border px-2 py-1 text-[10px] ${selectedRoutes[vehicleId] === option.key ? "border-sky-500 bg-sky-500/10" : "border-slate-700 bg-slate-900"}`}
                         >
                           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: option.color }} />{option.label}</span>
@@ -290,6 +313,7 @@ export function LiveIncidentsPanel({
                 selectedVehicleIds.forEach((vehicleId) => {
                   onDispatchVehicle(vehicleId, dispatchIncident.id, selectedRoutes[vehicleId]);
                 });
+                onRoutePreviewChange(null);
                 setDispatchIncidentId(null);
                 setSelectedVehicleIds([]);
               }}

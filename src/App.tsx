@@ -174,6 +174,16 @@ type IncomeToast = {
   amount: number;
 };
 
+type RoutePreviewState = {
+  incidentId: number;
+  routes: {
+    key: string;
+    color: string;
+    coordinates: [number, number][];
+  }[];
+  selectedRouteKey?: string;
+};
+
 // MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
 const STATION_COST = 100000;
 const DISPATCH_COST = 0;
@@ -804,6 +814,7 @@ export default function Page() {
     IncidentNotification[]
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
+  const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -1493,6 +1504,67 @@ export default function Page() {
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const sourceId = "dispatch-route-preview";
+    const selectedLayerId = "dispatch-route-preview-selected";
+    const altLayerId = "dispatch-route-preview-alt";
+
+    const clearLayers = () => {
+      if (map.getLayer(selectedLayerId)) map.removeLayer(selectedLayerId);
+      if (map.getLayer(altLayerId)) map.removeLayer(altLayerId);
+      if (map.getSource(sourceId)) map.removeSource(sourceId);
+    };
+
+    if (!routePreview || routePreview.routes.length === 0) {
+      clearLayers();
+      return;
+    }
+
+    const features = routePreview.routes.map((route) => ({
+      type: "Feature" as const,
+      properties: {
+        key: route.key,
+        color: route.color,
+        isSelected: route.key === routePreview.selectedRouteKey ? 1 : 0,
+      },
+      geometry: {
+        type: "LineString" as const,
+        coordinates: route.coordinates,
+      },
+    }));
+
+    clearLayers();
+    map.addSource(sourceId, {
+      type: "geojson",
+      data: { type: "FeatureCollection", features },
+    });
+
+    map.addLayer({
+      id: altLayerId,
+      type: "line",
+      source: sourceId,
+      filter: ["==", ["get", "isSelected"], 0],
+      paint: {
+        "line-color": ["get", "color"],
+        "line-width": 4,
+        "line-opacity": 0.55,
+      },
+    });
+    map.addLayer({
+      id: selectedLayerId,
+      type: "line",
+      source: sourceId,
+      filter: ["==", ["get", "isSelected"], 1],
+      paint: {
+        "line-color": ["get", "color"],
+        "line-width": 6,
+        "line-opacity": 0.95,
+      },
+    });
+  }, [routePreview]);
+
+  useEffect(() => {
     if (!mapRef.current) return;
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
@@ -1866,6 +1938,7 @@ export default function Page() {
       color: colors[idx] ?? "#a855f7",
       distanceKm: route.distanceKm,
       etaSeconds: Math.max(8, Math.round((route.distanceKm / speed) * 3600)),
+      coordinates: route.coordinates,
     }));
   }
 
@@ -2797,6 +2870,7 @@ export default function Page() {
         }
         onDispatchVehicle={dispatch}
         onLoadRouteOptions={loadRouteOptions}
+        onRoutePreviewChange={setRoutePreview}
       />
     </main>
   );
