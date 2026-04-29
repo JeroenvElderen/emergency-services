@@ -135,6 +135,7 @@ type AiStation = {
     homeLng: number;
     targetLat: number | null;
     targetLng: number | null;
+    route: [number, number][];
   }[];
 };
 
@@ -578,6 +579,19 @@ function generateCivilianZones(countryCode: string): CivilianZone[] {
   }));
 }
 
+
+
+function getAiCompanyColor(companyId: number) {
+  const palette = [
+    "rgba(99,102,241,0.95)",
+    "rgba(16,185,129,0.95)",
+    "rgba(244,63,94,0.95)",
+    "rgba(245,158,11,0.95)",
+    "rgba(14,165,233,0.95)",
+  ];
+  return palette[(companyId - 1) % palette.length];
+}
+
 function createAiStations(countryCode: string, anchor?: { lat: number; lng: number }): AiStation[] {
   const country = findCountry(countryCode);
   const stationTypes: StationType[] = ["FIRE", "EMS"];
@@ -612,6 +626,7 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
       homeLng: stationLng,
       targetLat: null,
       targetLng: null,
+      route: [],
     }));
 
     return {
@@ -2066,16 +2081,15 @@ export default function Page() {
         const total = Math.max(vehicle.totalEta, 1);
         const legProgress = 1 - Math.max(vehicle.eta, 0) / total;
         const clamped = Math.min(1, Math.max(0, legProgress));
-        const from =
-          vehicle.status === "RETURNING"
-            ? { lat: vehicle.targetLat, lng: vehicle.targetLng }
-            : { lat: vehicle.homeLat, lng: vehicle.homeLng };
-        const to =
+        const fallback =
           vehicle.status === "RETURNING"
             ? { lat: vehicle.homeLat, lng: vehicle.homeLng }
             : { lat: vehicle.targetLat, lng: vehicle.targetLng };
-        const lat = from.lat + (to.lat - from.lat) * clamped;
-        const lng = from.lng + (to.lng - from.lng) * clamped;
+        const fullRoute =
+          vehicle.route.length >= 2
+            ? vehicle.route
+            : ([[vehicle.homeLng, vehicle.homeLat], [vehicle.targetLng, vehicle.targetLat]] as [number, number][]);
+        const [lng, lat] = getRoutePosition(fullRoute, clamped, fallback);
 
         const existing = aiVehicleMarkerRefs.current.get(key);
         if (existing) {
@@ -2084,9 +2098,23 @@ export default function Page() {
         }
 
         const el = document.createElement("div");
-        el.className = "flex h-7 w-7 items-center justify-center rounded-full border border-indigo-100 bg-indigo-500/95 text-xs text-white shadow";
+        const color = getAiCompanyColor(station.id);
+        const icon =
+          vehicle.type === "ENGINE" || vehicle.type === "LADDER"
+            ? "🚒"
+            : vehicle.type === "AMBULANCE"
+              ? "🚑"
+              : vehicle.type === "RESCUE"
+                ? "🚐"
+                : "🚓";
+        el.className = "relative flex h-8 w-8 items-start justify-center";
         el.title = `AI ${VEHICLE_TYPES[vehicle.type].label}`;
-        el.textContent = "🤖";
+        el.innerHTML = `
+          <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">
+            ${icon}
+          </div>
+          <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
+        `;
         aiVehicleMarkerRefs.current.set(
           key,
           new mapboxgl.Marker({ element: el, anchor: "center" })
@@ -2128,9 +2156,16 @@ export default function Page() {
 
     game.aiStations.forEach((station) => {
       const el = document.createElement("div");
-      el.className = "flex h-8 w-8 items-center justify-center rounded-full border-2 border-indigo-200 bg-indigo-600/95 text-sm text-white shadow-lg";
+      const color = getAiCompanyColor(station.id);
+      const label = station.type === "FIRE" ? "🚒" : station.type === "EMS" ? "🏥" : "🏢";
+      el.className = "relative flex h-10 w-10 items-start justify-center";
       el.title = `${station.name} (AI)`;
-      el.innerHTML = "🤖";
+      el.innerHTML = `
+        <div style="position:relative;display:flex;height:30px;width:30px;align-items:center;justify-content:center;border-radius:8px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:15px;">
+          ${label}
+        </div>
+        <div style="position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
+      `;
       aiStationMarkerRefs.current.push(
         new mapboxgl.Marker({ element: el, anchor: "center" })
           .setLngLat([station.lng, station.lat])
@@ -2381,71 +2416,109 @@ export default function Page() {
     }
   }
 
-  function requestAiSupport(incidentId: number) {
-    setGame((current) => {
-      const incident = current.incidents.find((item) => item.id === incidentId);
-      if (!incident) return current;
-      const stage = incident.stages[incident.currentStage];
-      if (!stage) return current;
+  async function requestAiSupport(incidentId: number) {
+    const incident = game.incidents.find((item) => item.id === incidentId);
+    if (!incident) return;
+    const stage = incident.stages[incident.currentStage];
+    if (!stage) return;
 
-      const needed = requirementCounts(stage.required);
-      const alreadyAssigned = incident.assignedVehicleIds
-        .map((id) => current.vehicles.find((vehicle) => vehicle.id === id))
-        .filter((vehicle): vehicle is Vehicle => Boolean(vehicle))
-        .reduce(
-          (acc, vehicle) => ({ ...acc, [vehicle.type]: (acc[vehicle.type] ?? 0) + 1 }),
-          {} as Partial<Record<VehicleType, number>>,
+    const needed = requirementCounts(stage.required);
+    const alreadyAssigned = incident.assignedVehicleIds
+      .map((id) => game.vehicles.find((vehicle) => vehicle.id === id))
+      .filter((vehicle): vehicle is Vehicle => Boolean(vehicle))
+      .reduce(
+        (acc, vehicle) => ({ ...acc, [vehicle.type]: (acc[vehicle.type] ?? 0) + 1 }),
+        {} as Partial<Record<VehicleType, number>>,
+      );
+    incident.aiAssignedUnits.forEach((unit) => {
+      if (!unit.arrived) return;
+      alreadyAssigned[unit.type] = (alreadyAssigned[unit.type] ?? 0) + 1;
+    });
+
+    const planningStations = game.aiStations.map((station) => ({
+      ...station,
+      vehicles: station.vehicles.map((vehicle) => ({ ...vehicle })),
+    }));
+
+    const assignments: {
+      stationId: number;
+      vehicleId: number;
+      type: VehicleType;
+      eta: number;
+      route: [number, number][];
+      incidentId: number;
+      targetLat: number;
+      targetLng: number;
+    }[] = [];
+
+    for (const type of Object.keys(needed) as VehicleType[]) {
+      const missing = Math.max((needed[type] ?? 0) - (alreadyAssigned[type] ?? 0), 0);
+      for (let i = 0; i < missing; i += 1) {
+        const station = planningStations.find((item) =>
+          item.vehicles.some((vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type),
         );
-      incident.aiAssignedUnits.forEach((unit) => {
-        if (!unit.arrived) return;
-        alreadyAssigned[unit.type] = (alreadyAssigned[unit.type] ?? 0) + 1;
-      });
+        if (!station) continue;
+        const aiVehicle = station.vehicles.find(
+          (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
+        );
+        if (!aiVehicle) continue;
 
+        aiVehicle.status = "DISPATCHED";
+        const km = haversineKm(station, incident);
+        const eta = Math.max(10, Math.round((km / VEHICLE_TYPES[type].speedKmh) * 3600));
+        const roadRoute = await fetchRoadRoute(station, incident, mapToken);
+        assignments.push({
+          stationId: station.id,
+          vehicleId: aiVehicle.id,
+          type,
+          eta,
+          route:
+            roadRoute?.coordinates && roadRoute.coordinates.length >= 2
+              ? roadRoute.coordinates
+              : [[station.lng, station.lat], [incident.lng, incident.lat]],
+          incidentId: incident.id,
+          targetLat: incident.lat,
+          targetLng: incident.lng,
+        });
+      }
+    }
+
+    if (assignments.length === 0) return;
+
+    setGame((current) => {
       const nextAiStations = current.aiStations.map((station) => ({
         ...station,
         vehicles: station.vehicles.map((vehicle) => ({ ...vehicle })),
       }));
-      const assignedUnits: Incident["aiAssignedUnits"] = [];
 
-      (Object.keys(needed) as VehicleType[]).forEach((type) => {
-        const missing = Math.max((needed[type] ?? 0) - (alreadyAssigned[type] ?? 0), 0);
-        for (let i = 0; i < missing; i += 1) {
-          const station = nextAiStations.find((item) =>
-            item.vehicles.some(
-              (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
-            ),
-          );
-          if (!station) continue;
-          const aiVehicle = station.vehicles.find(
-            (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
-          );
-          if (!aiVehicle) continue;
-          const km = haversineKm(station, incident);
-          const eta = Math.max(10, Math.round((km / VEHICLE_TYPES[type].speedKmh) * 3600));
-          aiVehicle.status = "DISPATCHED";
-          aiVehicle.eta = eta;
-          aiVehicle.totalEta = eta;
-          aiVehicle.incidentId = incident.id;
-          aiVehicle.homeLat = station.lat;
-          aiVehicle.homeLng = station.lng;
-          aiVehicle.targetLat = incident.lat;
-          aiVehicle.targetLng = incident.lng;
-          assignedUnits.push({
-            id: aiVehicle.id,
-            type,
-            eta,
-            arrived: false,
-          });
-        }
+      assignments.forEach((assignment) => {
+        const station = nextAiStations.find((item) => item.id === assignment.stationId);
+        if (!station) return;
+        const aiVehicle = station.vehicles.find((vehicle) => vehicle.id === assignment.vehicleId);
+        if (!aiVehicle || aiVehicle.status !== "AVAILABLE") return;
+        aiVehicle.status = "DISPATCHED";
+        aiVehicle.eta = assignment.eta;
+        aiVehicle.totalEta = assignment.eta;
+        aiVehicle.incidentId = assignment.incidentId;
+        aiVehicle.homeLat = station.lat;
+        aiVehicle.homeLng = station.lng;
+        aiVehicle.targetLat = assignment.targetLat;
+        aiVehicle.targetLng = assignment.targetLng;
+        aiVehicle.route = assignment.route;
       });
 
-      if (assignedUnits.length === 0) return current;
+      const assignedUnits: Incident["aiAssignedUnits"] = assignments.map((assignment) => ({
+        id: assignment.vehicleId,
+        type: assignment.type,
+        eta: assignment.eta,
+        arrived: false,
+      }));
 
       return {
         ...current,
         aiStations: nextAiStations,
         incidents: current.incidents.map((item) =>
-          item.id === incident.id
+          item.id === incidentId
             ? {
                 ...item,
                 status: "RESPONDING",
@@ -2948,6 +3021,7 @@ export default function Page() {
               homeLng: lng,
               targetLat: null,
               targetLng: null,
+              route: [],
             })),
           });
           nextAiStationId += 1;
