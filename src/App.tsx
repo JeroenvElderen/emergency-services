@@ -206,10 +206,6 @@ const WEATHER_EFFECTS: Record<
 };
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
-const TERRAIN_EXAGGERATION: Record<MapVisualStyle, number> = {
-  SATELLITE_3D: 1.2,
-  DARK_3D: 1.35,
-};
 
 const STATION_TYPES = {
   FIRE: { label: "Fire", icon: Flame },
@@ -841,6 +837,7 @@ export default function Page() {
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
+  const enableTerrain3D = import.meta.env.VITE_ENABLE_TERRAIN_3D === "true";
   const activeCountry = findCountry(game.activeCountryCode);
   const mapStyleUrl =
     mapVisualStyle === "SATELLITE_3D"
@@ -1379,8 +1376,14 @@ export default function Page() {
       attributionControl: false,
     });
 
-    const apply3dTerrainAndBuildings = () => {
+    const setTerrainForViewport = () => {
       if (!mapRef.current) return;
+
+      if (!enableTerrain3D) {
+        mapRef.current.setTerrain(null);
+        return;
+      }
+
       if (!mapRef.current.getSource("mapbox-dem")) {
         mapRef.current.addSource("mapbox-dem", {
           type: "raster-dem",
@@ -1389,64 +1392,34 @@ export default function Page() {
           maxzoom: 14,
         });
       }
-      mapRef.current.setTerrain({
-        source: "mapbox-dem",
-        exaggeration: TERRAIN_EXAGGERATION[mapVisualStyle],
-      });
-      if (!mapRef.current.getLayer("terrain-hillshade")) {
-        mapRef.current.addLayer({
-          id: "terrain-hillshade",
-          type: "hillshade",
-          source: "mapbox-dem",
-          paint: {
-            "hillshade-shadow-color": "#1f2937",
-            "hillshade-highlight-color": "#f8fafc",
-            "hillshade-accent-color": "#64748b",
-            "hillshade-exaggeration": 0.22,
-          },
-        });
-      }
-      mapRef.current.setLayoutProperty(
-        "terrain-hillshade",
-        "visibility",
-        mapVisualStyle === "DARK_3D" ? "visible" : "none",
+      
+      const center = mapRef.current.getCenter();
+      const centerFeatures = mapRef.current.queryRenderedFeatures(
+        mapRef.current.project([center.lng, center.lat]),
       );
+      const centerIsWater = centerFeatures.some(isWaterFeature);
+
+      // Keep terrain in land views, but flatten sea-centric views so water stays level.
+      if (centerIsWater) {
+        mapRef.current.setTerrain(null);
+      } else {
+        mapRef.current.setTerrain({ source: "mapbox-dem", exaggeration: 1 });
+      }
+    };
+
+    const apply3dTerrainAndBuildings = () => {
+      if (!mapRef.current) return;
+      setTerrainForViewport();
       mapRef.current.setFog({
         color: "rgb(12, 18, 30)",
         "high-color": "rgb(26, 56, 92)",
         "horizon-blend": 0.18,
       });
 
-      if (!mapRef.current.getLayer("3d-buildings")) {
-        const layers = mapRef.current.getStyle().layers ?? [];
-        const labelLayerId = layers.find(
-          (layer) =>
-            layer.type === "symbol" &&
-            typeof layer.layout?.["text-field"] !== "undefined",
-        )?.id;
-
-        mapRef.current.addLayer(
-          {
-            id: "3d-buildings",
-            source: "composite",
-            "source-layer": "building",
-            filter: ["==", ["get", "extrude"], "true"],
-            type: "fill-extrusion",
-            minzoom: 14,
-            paint: {
-              "fill-extrusion-color": "#2f3d52",
-              "fill-extrusion-height": ["coalesce", ["get", "height"], 0],
-              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-              "fill-extrusion-opacity": 0.65,
-            },
-          },
-          labelLayerId,
-        );
-      }
     };
 
     mapRef.current.on("style.load", apply3dTerrainAndBuildings);
-    mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+    mapRef.current.on("moveend", setTerrainForViewport);
 
     return () => {
       stationMarkerRefs.current.forEach((marker) => marker.remove());
@@ -1457,10 +1430,11 @@ export default function Page() {
       incidentMarkerRefs.current = [];
       realStationMarkerRefs.current = [];
       vehicleMarkerRefs.current.clear();
+      mapRef.current?.off("moveend", setTerrainForViewport);
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [activeCountry.center, activeCountry.zoom, mapStyleUrl, mapToken, mapVisualStyle]);
+  }, [activeCountry.center, activeCountry.zoom, enableTerrain3D, isWaterFeature, mapStyleUrl, mapToken, mapVisualStyle]);
 
   useEffect(() => {
     if (!mapRef.current) return;
