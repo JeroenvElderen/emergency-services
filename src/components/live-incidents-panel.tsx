@@ -167,6 +167,7 @@ export function LiveIncidentsPanel({
                   size="sm"
                   variant="outline"
                   onClick={() => onRequestAiSupport(incident)}
+                  title="AI follows the user-configured response behavior"
                 >
                   AI
                 </Button>
@@ -174,6 +175,10 @@ export function LiveIncidentsPanel({
               <p className="relative z-10 mt-2 text-[10px] text-slate-300">
                 Progress: {Math.round(progress.overall * 100)}%
               </p>
+              <p className="relative z-10 mt-1 text-[10px] text-sky-300">
+                AI support follows the response setup made for the user.
+              </p>
+
               <p className="relative z-10 mt-1 text-[10px] text-slate-400">
                 Assigned: {incident.assignedVehicleIds.length} • Required types:{" "}
                 {[...new Set(stage?.required ?? [])].join(", ") || "Any"}
