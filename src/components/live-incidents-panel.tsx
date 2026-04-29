@@ -1,4 +1,4 @@
-import { Check, MapPinned, Truck } from "lucide-react";
+import { Check, Truck } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,8 @@ type MissionProgress = {
   colorClass: string;
 };
 
+type IncidentFlightPhase = "NEW" | "ENROUTE" | "ON SCENE" | "RETURN";
+
 type Props = {
   activeIncidents: IncidentLike[];
   focusedIncidentId: number | null;
@@ -59,8 +61,6 @@ type Props = {
   vehicles: VehicleLike[];
   credits: number;
   dispatchCost: number;
-  onFocusIncident: (incident: IncidentLike) => void;
-  onDispatchSuggested: (incident: IncidentLike) => void;
   onDispatchVehicle: (vehicleId: number, incidentId: number, routeKey?: string) => void;
   onLoadRouteOptions: (vehicleId: number, incidentId: number) => Promise<RouteOption[]>;
   onRoutePreviewChange: (preview: RoutePreview | null) => void;
@@ -95,8 +95,6 @@ export function LiveIncidentsPanel({
   vehicles,
   credits,
   dispatchCost,
-  onFocusIncident,
-  onDispatchSuggested,
   onDispatchVehicle,
   onLoadRouteOptions,
   onRoutePreviewChange,
@@ -118,15 +116,38 @@ export function LiveIncidentsPanel({
   );
 
 
-  const sortedIncidents = useMemo(
-    () =>
-      [...activeIncidents].sort((a, b) => {
-        const byStatus = Number(a.status === "RESPONDING") - Number(b.status === "RESPONDING");
-        if (byStatus !== 0) return byStatus;
-        return b.id - a.id;
-      }),
-    [activeIncidents],
-  );
+  const getFlightPhase = (incident: IncidentLike, progress: MissionProgress): IncidentFlightPhase => {
+    if (incident.assignedVehicleIds.length === 0) return "NEW";
+    if (progress.mission < 0.85) return "ENROUTE";
+    if (progress.returnTrip < 0.95) return "ON SCENE";
+    return "RETURN";
+  };
+
+  const phaseOrder: IncidentFlightPhase[] = ["NEW", "ENROUTE", "ON SCENE", "RETURN"];
+
+  const incidentsByPhase = useMemo(() => {
+    const grouped = Object.fromEntries(
+      phaseOrder.map((phase) => [phase, [] as Array<{ incident: IncidentLike; progress: MissionProgress }>]),
+    ) as Record<IncidentFlightPhase, Array<{ incident: IncidentLike; progress: MissionProgress }>>;
+
+    for (const incident of activeIncidents) {
+      const progress = missionProgress(incident);
+      const phase = getFlightPhase(incident, progress);
+      grouped[phase].push({ incident, progress });
+    }
+
+    for (const phase of phaseOrder) {
+      grouped[phase].sort((a, b) => b.incident.id - a.incident.id);
+    }
+
+    return grouped;
+  }, [activeIncidents, missionProgress]);
+
+  const getFlightPhaseTone = (phase: IncidentFlightPhase): "warn" | "blue" | "good" => {
+    if (phase === "NEW") return "warn";
+    if (phase === "RETURN") return "good";
+    return "blue";
+  };
 
   const getCardProgressFillClass = (colorClass: string) => {
     if (colorClass.includes("amber")) return "bg-amber-500/18";
@@ -136,28 +157,45 @@ export function LiveIncidentsPanel({
 
   return (
     <>
-      <div className="absolute bottom-3 right-3 z-30 max-h-[45vh] w-[320px] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2.5 shadow-2xl backdrop-blur-sm">
+      <div className="absolute bottom-3 right-3 z-30 max-h-[45vh] w-[min(96vw,1100px)] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2.5 shadow-2xl backdrop-blur-sm">
       <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">Live Incidents</h2>
       {activeIncidents.length === 0 ? (
         <p className="text-xs text-slate-400">No active incidents.</p>
       ) : (
-        sortedIncidents.map((incident) => {
-          const stage = incident.stages[incident.currentStage];
-          const progress = missionProgress(incident);
-          const completionClass = progress.overall >= 0.85
-            ? "ring-1 ring-emerald-500/50"
-            : progress.overall >= 0.45
-              ? "ring-1 ring-amber-500/40"
-              : "";
-          return (
-            <div
-              key={incident.id}
-              className={`relative overflow-hidden rounded-lg border p-2 transition ${
-                focusedIncidentId === incident.id
-                  ? "border-sky-500/80 bg-sky-950/40"
-                  : "border-slate-700 bg-slate-900/90"
-              } ${completionClass}`}
-            >
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {phaseOrder.map((phase) => (
+            <div key={phase} className="space-y-1.5 rounded-lg border border-slate-800/80 bg-slate-900/70 p-1.5">
+              <div className="flex items-center justify-between">
+                <Badge tone={getFlightPhaseTone(phase)}>{phase}</Badge>
+                <span className="text-[10px] text-slate-400">{incidentsByPhase[phase].length}</span>
+              </div>
+              {incidentsByPhase[phase].length === 0 ? (
+                <p className="px-1 py-2 text-[10px] text-slate-500">No incidents</p>
+              ) : (
+                incidentsByPhase[phase].map(({ incident, progress }) => {
+                  const stage = incident.stages[incident.currentStage];
+                  const completionClass = progress.overall >= 0.85
+                    ? "ring-1 ring-emerald-500/50"
+                    : progress.overall >= 0.45
+                      ? "ring-1 ring-amber-500/40"
+                      : "";
+                  return (
+                    <button
+                      key={incident.id}
+                      type="button"
+                      onClick={() => {
+                        setDispatchIncidentId(incident.id);
+                        setSelectedVehicleIds([]);
+                        setRouteChoices({});
+                        setSelectedRoutes({});
+                        onRoutePreviewChange(null);
+                      }}
+                      className={`relative overflow-hidden rounded-lg border p-2 transition ${
+                        focusedIncidentId === incident.id
+                          ? "border-sky-500/80 bg-sky-950/40"
+                          : "border-slate-700 bg-slate-900/90 hover:border-sky-600/70"
+                      } ${completionClass}`}
+                    >
               <div
                 className={`pointer-events-none absolute inset-y-0 left-0 transition-all ${getCardProgressFillClass(progress.colorClass)}`}
                 style={{ width: `${Math.round(progress.overall * 100)}%` }}
@@ -171,47 +209,14 @@ export function LiveIncidentsPanel({
                     {stage?.label} • reward {incident.reward}
                   </p>
                 </div>
-                <Badge tone={incident.status === "OPEN" ? "warn" : "blue"}>
-                  {incident.status}
-                </Badge>
               </div>
-              <div className="relative z-10 mt-2 flex gap-1">
-                <Button size="sm" variant="outline" onClick={() => onFocusIncident(incident)}>
-                  <MapPinned className="mr-1 h-3.5 w-3.5" />
-                  Focus map
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setDispatchIncidentId(incident.id);
-                    setSelectedVehicleIds([]);
-                    setRouteChoices({});
-                    setSelectedRoutes({});
-                    onRoutePreviewChange(null);
-                  }}
-                  disabled={availableVehicles.length === 0}
-                >
-                  Select vehicles
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onDispatchSuggested(incident)}
-                  disabled={credits < dispatchCost}
-                >
-                  Auto
-                </Button>
+              </button>
+                  );
+                })
+              )}
               </div>
-              <p className="relative z-10 mt-2 text-[10px] text-slate-300">
-                Progress: {Math.round(progress.overall * 100)}%
-              </p>
-              <p className="relative z-10 mt-1 text-[10px] text-slate-400">
-                Assigned: {incident.assignedVehicleIds.length} • Required types:{" "}
-                {[...new Set(stage?.required ?? [])].join(", ") || "Any"}
-              </p>
-            </div>
-          );
-        })
+              ))}
+        </div>
       )}
       </div>
 

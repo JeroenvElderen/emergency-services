@@ -20,7 +20,6 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { LiveIncidentsPanel } from "@/components/live-incidents-panel";
-import type { IncidentLike } from "@/components/live-incidents-panel";
 import type {
   IncidentCategory,
   IncidentStatus,
@@ -184,6 +183,8 @@ type RoutePreviewState = {
   selectedRouteKey?: string;
 };
 
+type MapVisualStyle = "DARK_3D" | "SATELLITE_3D";
+
 // MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
 const STATION_COST = 100000;
 const DISPATCH_COST = 0;
@@ -205,6 +206,10 @@ const WEATHER_EFFECTS: Record<
 };
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
+const TERRAIN_EXAGGERATION: Record<MapVisualStyle, number> = {
+  SATELLITE_3D: 1.2,
+  DARK_3D: 1.35,
+};
 
 const STATION_TYPES = {
   FIRE: { label: "Fire", icon: Flame },
@@ -815,6 +820,7 @@ export default function Page() {
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
+  const [mapVisualStyle, setMapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -836,6 +842,10 @@ export default function Page() {
   const lastVehicleTickAtRef = useRef(0);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
+  const mapStyleUrl =
+    mapVisualStyle === "SATELLITE_3D"
+      ? "mapbox://styles/mapbox/satellite-streets-v12"
+      : "mapbox://styles/mapbox/dark-v11";
 
   const isWithinCountryBounds = useCallback(
     (lat: number, lng: number, countryCode: string) => {
@@ -1360,11 +1370,12 @@ export default function Page() {
 
     mapRef.current = new mapboxgl.Map({
       container: mapContainerRef.current,
-      style: "mapbox://styles/mapbox/dark-v11",
+      style: mapStyleUrl,
       center: activeCountry.center,
       zoom: activeCountry.zoom,
-      pitch: 52,
-      bearing: -18,
+      pitch: 58,
+      bearing: -20,
+      maxPitch: 85,
       attributionControl: false,
     });
 
@@ -1373,12 +1384,33 @@ export default function Page() {
       if (!mapRef.current.getSource("mapbox-dem")) {
         mapRef.current.addSource("mapbox-dem", {
           type: "raster-dem",
-          url: "mapbox://mapbox.terrain-rgb",
+          url: "mapbox://mapbox.mapbox-terrain-dem-v1",
           tileSize: 512,
           maxzoom: 14,
         });
       }
-      mapRef.current.setTerrain({ source: "mapbox-dem", exaggeration: 1.25 });
+      mapRef.current.setTerrain({
+        source: "mapbox-dem",
+        exaggeration: TERRAIN_EXAGGERATION[mapVisualStyle],
+      });
+      if (!mapRef.current.getLayer("terrain-hillshade")) {
+        mapRef.current.addLayer({
+          id: "terrain-hillshade",
+          type: "hillshade",
+          source: "mapbox-dem",
+          paint: {
+            "hillshade-shadow-color": "#1f2937",
+            "hillshade-highlight-color": "#f8fafc",
+            "hillshade-accent-color": "#64748b",
+            "hillshade-exaggeration": 0.22,
+          },
+        });
+      }
+      mapRef.current.setLayoutProperty(
+        "terrain-hillshade",
+        "visibility",
+        mapVisualStyle === "DARK_3D" ? "visible" : "none",
+      );
       mapRef.current.setFog({
         color: "rgb(12, 18, 30)",
         "high-color": "rgb(26, 56, 92)",
@@ -1428,7 +1460,12 @@ export default function Page() {
       mapRef.current?.remove();
       mapRef.current = null;
     };
-  }, [activeCountry.center, activeCountry.zoom, mapToken]);
+  }, [activeCountry.center, activeCountry.zoom, mapStyleUrl, mapToken, mapVisualStyle]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+    mapRef.current.setStyle(mapStyleUrl);
+  }, [mapStyleUrl]);
 
   useEffect(() => {
     flyToCountry(game.activeCountryCode);
@@ -2650,6 +2687,19 @@ export default function Page() {
         <Button size="sm" variant="outline" onClick={resetGame}>
           Reset
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2"
+          onClick={() =>
+            setMapVisualStyle((current) =>
+              current === "SATELLITE_3D" ? "DARK_3D" : "SATELLITE_3D",
+            )
+          }
+          title="Toggle map style"
+        >
+          {mapVisualStyle === "SATELLITE_3D" ? "Satellite" : "Dark"}
+        </Button>
 
         {buildPickerOpen && (
           <div className="absolute left-0 top-[calc(100%+0.5rem)] w-[280px] rounded-xl border border-slate-700 bg-slate-900/90 p-2">
@@ -2905,17 +2955,6 @@ export default function Page() {
         vehicles={game.vehicles}
         credits={game.credits}
         dispatchCost={DISPATCH_COST}
-        onFocusIncident={(incident: IncidentLike) => {
-          mapRef.current?.flyTo({
-            center: [incident.lng, incident.lat],
-            zoom: Math.max(mapRef.current.getZoom(), 12),
-            essential: true,
-          });
-          setFocusedIncidentId(incident.id);
-        }}
-        onDispatchSuggested={(incident) =>
-          dispatchRequiredVehicles(incident as Incident)
-        }
         onDispatchVehicle={dispatch}
         onLoadRouteOptions={loadRouteOptions}
         onRoutePreviewChange={setRoutePreview}
