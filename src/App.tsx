@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cartesian3,
-  Color,
+  Cartographic,
   createWorldTerrainAsync,
-  Entity,
+  HeightReference,
   Ion,
   Math as CesiumMath,
   ScreenSpaceEventHandler,
-  ScreenSpaceEventType,
   Viewer,
 } from "cesium";
 import {
@@ -192,7 +191,27 @@ type RoutePreviewState = {
   selectedRouteKey?: string;
 };
 
-type MapVisualStyle = "DARK_3D" | "SATELLITE_3D";
+type MarkerLike = {
+  setLngLat: (lngLat: [number, number]) => MarkerLike;
+  addTo: (map: unknown) => MarkerLike;
+  remove: () => void;
+};
+
+type MapboxLike = {
+  Marker: new (options: { element: HTMLElement; anchor: string }) => MarkerLike;
+};
+type MapRefLike = {
+  current: {
+    flyTo: (options: { center: [number, number]; zoom?: number; essential?: boolean }) => void;
+    getZoom: () => number;
+    getLayer: (_id: string) => unknown;
+    removeLayer: (_id: string) => void;
+    getSource: (_id: string) => unknown;
+    removeSource: (_id: string) => void;
+    addSource: (_id: string, _source: unknown) => void;
+    addLayer: (_layer: unknown) => void;
+  } | null;
+};
 
 // MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
 const STATION_COST = 100000;
@@ -213,7 +232,7 @@ const WEATHER_EFFECTS: Record<
   SNOW: { speedMultiplier: 0.72, incidentMultiplier: 1.24, label: "Snow" },
   HEAT: { speedMultiplier: 0.9, incidentMultiplier: 1.12, label: "Heat" },
 };
-const OPEN_ROUTE_SERVICE_BASE_URL =
+const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.openrouteservice.org/v2/directions/driving-car/geojson";
 
 const STATION_TYPES = {
@@ -825,14 +844,13 @@ export default function Page() {
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
-  const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const clickHandlerRef = useRef<ScreenSpaceEventHandler | null>(null);
-  const stationMarkerRefs = useRef<Entity[]>([]);
-  const incidentMarkerRefs = useRef<Entity[]>([]);
-  const realStationMarkerRefs = useRef<Entity[]>([]);
-  const vehicleMarkerRefs = useRef<Map<number, Entity>>(new Map());
+  const stationMarkerRefs = useRef<MarkerLike[]>([]);
+  const incidentMarkerRefs = useRef<MarkerLike[]>([]);
+  const realStationMarkerRefs = useRef<MarkerLike[]>([]);
+  const vehicleMarkerRefs = useRef<Map<number, MarkerLike>>(new Map());
   const vehicleProgressFloorRef = useRef<
     Map<
       number,
@@ -846,10 +864,71 @@ export default function Page() {
   >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
-  const directionsToken = import.meta.env.VITE_OPENROUTESERVICE_KEY as string | undefined;
   const cesiumIonToken = import.meta.env.VITE_CESIUM_ION_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
-  const mapStyleUrl = mapVisualStyle;
+  const mapToken = cesiumIonToken;
+  const mapRef: MapRefLike = {
+    current: {
+      flyTo: ({ center, zoom }) => {
+        const altitude = zoom ? Math.max(300, 12_000_000 / 2 ** zoom) : 2_500_000;
+        viewerRef.current?.camera.flyTo({
+          destination: Cartesian3.fromDegrees(center[0], center[1], altitude),
+          duration: 1.2,
+        });
+      },
+      getZoom: () => {
+        if (!viewerRef.current) return 5;
+        const cartographic = Cartographic.fromCartesian(
+          viewerRef.current.camera.position,
+        );
+        const height = cartographic.height;
+        return Math.max(1, Math.min(18, Math.log2(12_000_000 / Math.max(height, 300))));
+      },
+      getLayer: () => null,
+      removeLayer: () => undefined,
+      getSource: () => null,
+      removeSource: () => undefined,
+      addSource: () => undefined,
+      addLayer: () => undefined,
+    },
+  };
+  const mapboxgl = useMemo<MapboxLike>(
+    () => ({
+      Marker: class CesiumMarker implements MarkerLike {
+        private entity: ReturnType<Viewer["entities"]["add"]> | null = null;
+        private lngLat: [number, number] = [0, 0];
+        constructor(private options: { element: HTMLElement; anchor: string }) {}
+        setLngLat(lngLat: [number, number]) {
+          this.lngLat = lngLat;
+          if (this.entity) {
+            this.entity.position = Cartesian3.fromDegrees(lngLat[0], lngLat[1], 10);
+          }
+          return this;
+        }
+        addTo() {
+          if (!viewerRef.current) return this;
+          this.entity = viewerRef.current.entities.add({
+            position: Cartesian3.fromDegrees(this.lngLat[0], this.lngLat[1], 10),
+            billboard: {
+              image: `data:image/svg+xml;utf8,${encodeURIComponent(
+                `<svg xmlns='http://www.w3.org/2000/svg' width='28' height='28'><circle cx='14' cy='14' r='12' fill='#22d3ee' stroke='#0f172a' stroke-width='2'/></svg>`,
+              )}`,
+              heightReference: HeightReference.CLAMP_TO_GROUND,
+            },
+            description: this.options.element.title,
+          });
+          return this;
+        }
+        remove() {
+          if (this.entity && viewerRef.current) {
+            viewerRef.current.entities.remove(this.entity);
+            this.entity = null;
+          }
+        }
+      },
+    }),
+    [],
+  );
 
   const isWithinCountryBounds = useCallback(
     (lat: number, lng: number, countryCode: string) => {
@@ -1130,7 +1209,7 @@ export default function Page() {
     [game.vehicles],
   );
 
-  const isWaterFeature = useCallback((feature: mapboxgl.MapboxGeoJSONFeature) => {
+  const isWaterFeature = useCallback((feature: unknown) => {
     const layerId = feature.layer?.id?.toLowerCase() ?? "";
     const sourceLayer = feature.sourceLayer?.toLowerCase() ?? "";
     const featureClass = String(feature.properties?.class ?? "").toLowerCase();
@@ -1391,7 +1470,7 @@ export default function Page() {
     viewerRef.current = viewer;
 
     void createWorldTerrainAsync().then((terrain) => {
-      if (viewerRef.current) viewerRef.current.scene.setTerrain(terrain);
+      if (viewerRef.current) viewerRef.current.terrainProvider = terrain;
     });
 
     const [lng, lat] = activeCountry.center;
