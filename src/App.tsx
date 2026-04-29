@@ -2492,121 +2492,6 @@ export default function Page() {
     }
   }
 
-  async function requestAiSupport(incidentId: number) {
-    const incident = game.incidents.find((item) => item.id === incidentId);
-    if (!incident) return;
-    const stage = incident.stages[incident.currentStage];
-    if (!stage) return;
-
-    const needed = requirementCounts(stage.required);
-    const alreadyAssigned = incident.assignedVehicleIds
-      .map((id) => game.vehicles.find((vehicle) => vehicle.id === id))
-      .filter((vehicle): vehicle is Vehicle => Boolean(vehicle))
-      .reduce(
-        (acc, vehicle) => ({ ...acc, [vehicle.type]: (acc[vehicle.type] ?? 0) + 1 }),
-        {} as Partial<Record<VehicleType, number>>,
-      );
-    incident.aiAssignedUnits.forEach((unit) => {
-      if (!unit.arrived) return;
-      alreadyAssigned[unit.type] = (alreadyAssigned[unit.type] ?? 0) + 1;
-    });
-
-    const planningStations = game.aiStations.map((station) => ({
-      ...station,
-      vehicles: station.vehicles.map((vehicle) => ({ ...vehicle })),
-    }));
-
-    const assignments: {
-      stationId: number;
-      vehicleId: number;
-      type: VehicleType;
-      eta: number;
-      route: [number, number][];
-      incidentId: number;
-      targetLat: number;
-      targetLng: number;
-    }[] = [];
-
-    for (const type of Object.keys(needed) as VehicleType[]) {
-      const missing = Math.max((needed[type] ?? 0) - (alreadyAssigned[type] ?? 0), 0);
-      for (let i = 0; i < missing; i += 1) {
-        const station = planningStations.find((item) =>
-          item.vehicles.some((vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type),
-        );
-        if (!station) continue;
-        const aiVehicle = station.vehicles.find(
-          (vehicle) => vehicle.status === "AVAILABLE" && vehicle.type === type,
-        );
-        if (!aiVehicle) continue;
-
-        aiVehicle.status = "DISPATCHED";
-        const km = haversineKm(station, incident);
-        const eta = Math.max(10, Math.round((km / VEHICLE_TYPES[type].speedKmh) * 3600));
-        const roadRoute = await fetchRoadRoute(station, incident, mapToken);
-        assignments.push({
-          stationId: station.id,
-          vehicleId: aiVehicle.id,
-          type,
-          eta,
-          route:
-            roadRoute?.coordinates && roadRoute.coordinates.length >= 2
-              ? roadRoute.coordinates
-              : [[station.lng, station.lat], [incident.lng, incident.lat]],
-          incidentId: incident.id,
-          targetLat: incident.lat,
-          targetLng: incident.lng,
-        });
-      }
-    }
-
-    if (assignments.length === 0) return;
-
-    setGame((current) => {
-      const nextAiStations = current.aiStations.map((station) => ({
-        ...station,
-        vehicles: station.vehicles.map((vehicle) => ({ ...vehicle })),
-      }));
-
-      assignments.forEach((assignment) => {
-        const station = nextAiStations.find((item) => item.id === assignment.stationId);
-        if (!station) return;
-        const aiVehicle = station.vehicles.find((vehicle) => vehicle.id === assignment.vehicleId);
-        if (!aiVehicle || aiVehicle.status !== "AVAILABLE") return;
-        aiVehicle.status = "DISPATCHED";
-        aiVehicle.eta = assignment.eta;
-        aiVehicle.totalEta = assignment.eta;
-        aiVehicle.incidentId = assignment.incidentId;
-        aiVehicle.homeLat = station.lat;
-        aiVehicle.homeLng = station.lng;
-        aiVehicle.targetLat = assignment.targetLat;
-        aiVehicle.targetLng = assignment.targetLng;
-        aiVehicle.route = assignment.route;
-      });
-
-      const assignedUnits: Incident["aiAssignedUnits"] = assignments.map((assignment) => ({
-        id: assignment.vehicleId,
-        type: assignment.type,
-        eta: assignment.eta,
-        arrived: false,
-      }));
-
-      return {
-        ...current,
-        aiStations: nextAiStations,
-        incidents: current.incidents.map((item) =>
-          item.id === incidentId
-            ? {
-                ...item,
-                status: "RESPONDING",
-                aiAssignedUnits: [...item.aiAssignedUnits, ...assignedUnits],
-              }
-            : item,
-        ),
-        log: [`Requested AI support for ${incident.title} (${assignedUnits.length} units).`, ...current.log].slice(0, 10),
-      };
-    });
-  }
-
   function buyVehicle(stationId: number, type: VehicleType) {
     setGame((current) => {
       const config = VEHICLE_TYPES[type];
@@ -3803,13 +3688,6 @@ export default function Page() {
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
-                  onClick={() => requestAiSupport(notice.id)}
-                >
-                  Request AI
-                </Button>
-                <Button
-                  size="sm"
                   className="w-full"
                   onClick={() => {
                     const incident = game.incidents.find((item) => item.id === notice.id);
@@ -3852,7 +3730,6 @@ export default function Page() {
           dispatchRequiredVehicles(incident as Incident)
         }
         onDispatchVehicle={dispatch}
-        onRequestAiSupport={(incident) => requestAiSupport(incident.id)}
       />
     </main>
   );
