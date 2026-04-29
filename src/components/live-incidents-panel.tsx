@@ -52,7 +52,7 @@ type MissionProgress = {
   colorClass: string;
 };
 
-type IncidentFlightPhase = "NEW" | "ENROUTE" | "ON SCENE" | "RETURN";
+type IncidentFlightPhase = "NEW" | "ENROUTE" | "ON_SCENE" | "RETURN";
 
 type Props = {
   activeIncidents: IncidentLike[];
@@ -120,11 +120,17 @@ export function LiveIncidentsPanel({
   const getFlightPhase = (incident: IncidentLike, progress: MissionProgress): IncidentFlightPhase => {
     if (incident.assignedVehicleIds.length === 0) return "NEW";
     if (progress.mission < 0.85) return "ENROUTE";
-    if (progress.returnTrip < 0.95) return "ON SCENE";
+    if (progress.returnTrip < 0.95) return "ON_SCENE";
     return "RETURN";
   };
 
-  const phaseOrder: IncidentFlightPhase[] = ["NEW", "ENROUTE", "ON SCENE", "RETURN"];
+  const phaseOrder: IncidentFlightPhase[] = ["NEW", "ENROUTE", "ON_SCENE", "RETURN"];
+  const phaseLabels: Record<IncidentFlightPhase, string> = {
+    NEW: "NEW",
+    ENROUTE: "ENROUTE",
+    ON_SCENE: "ON SCENE",
+    RETURN: "RETURN",
+  };
 
   const incidentsByPhase = useMemo(() => {
     const grouped = Object.fromEntries(
@@ -186,14 +192,13 @@ export function LiveIncidentsPanel({
           {phaseOrder.map((phase) => (
             <div key={phase} className="space-y-1.5 rounded-lg border border-slate-800/80 bg-slate-900/70 p-1.5">
               <div className="flex items-center justify-between">
-                <Badge tone={getFlightPhaseTone(phase)}>{phase}</Badge>
+                <Badge tone={getFlightPhaseTone(phase)}>{phaseLabels[phase]}</Badge>
                 <span className="text-[10px] text-slate-400">{incidentsByPhase[phase].length}</span>
               </div>
               {incidentsByPhase[phase].length === 0 ? (
                 <p className="px-1 py-2 text-[10px] text-slate-500">No incidents</p>
               ) : (
                 incidentsByPhase[phase].map(({ incident, progress }) => {
-                  const stage = incident.stages[incident.currentStage];
                   const completionClass = progress.overall >= 0.85
                     ? "ring-1 ring-emerald-500/50"
                     : progress.overall >= 0.45
@@ -210,7 +215,7 @@ export function LiveIncidentsPanel({
                         setSelectedRoutes({});
                         onRoutePreviewChange(null);
                       }}
-                      className={`relative overflow-hidden rounded-lg border p-2 transition ${
+                      className={`relative overflow-hidden rounded-lg border px-2 py-1.5 transition ${
                         focusedIncidentId === incident.id
                           ? "border-sky-500/80 bg-sky-950/40"
                           : "border-slate-700 bg-slate-900/90 hover:border-sky-600/70"
@@ -222,13 +227,9 @@ export function LiveIncidentsPanel({
                 aria-hidden="true"
               />
 
-              <div className="relative z-10 flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs font-semibold text-slate-100">{incident.title}</p>
-                  <p className="text-[10px] text-slate-400">
-                    {stage?.label} • reward {incident.reward}
-                  </p>
-                </div>
+              <div className="relative z-10 flex items-center justify-between gap-2">
+                <p className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-100">{incident.title}</p>
+                <p className="shrink-0 text-[10px] text-slate-300">reward {incident.reward}</p>
               </div>
               </button>
                   );
