@@ -642,6 +642,44 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
   });
 }
 
+function clampToCountryBounds(
+  point: { lat: number; lng: number },
+  countryCode: string,
+) {
+  const country = findCountry(countryCode);
+  return {
+    lat: Math.min(country.bounds.maxLat, Math.max(country.bounds.minLat, point.lat)),
+    lng: Math.min(country.bounds.maxLng, Math.max(country.bounds.minLng, point.lng)),
+  };
+}
+
+function randomSpawnNearAnchor(
+  anchor: { lat: number; lng: number },
+  countryCode: string,
+  minOffsetKm: number,
+  maxOffsetKm: number,
+  blocked: { lat: number; lng: number }[] = [],
+) {
+  const kmToDegrees = 1 / 111;
+  for (let i = 0; i < 12; i += 1) {
+    const distanceKm = minOffsetKm + Math.random() * (maxOffsetKm - minOffsetKm);
+    const angle = Math.random() * Math.PI * 2;
+    const point = clampToCountryBounds(
+      {
+        lat: anchor.lat + Math.sin(angle) * distanceKm * kmToDegrees,
+        lng: anchor.lng + Math.cos(angle) * distanceKm * kmToDegrees,
+      },
+      countryCode,
+    );
+    const overlapsBlocked = blocked.some((location) => haversineKm(location, point) < 0.35);
+    if (!overlapsBlocked) return point;
+  }
+  return clampToCountryBounds(
+    { lat: anchor.lat + 0.02, lng: anchor.lng + 0.02 },
+    countryCode,
+  );
+}
+
 function stationCapacity(station: Pick<Station, "level" | "upgrades">) {
   return 4 + (station.level - 1) * 2 + station.upgrades.bayCapacity * 2;
 }
@@ -1113,6 +1151,7 @@ export default function Page() {
     >
   >(new Map());
   const pendingReturnRouteVehicleIdsRef = useRef<Set<number>>(new Set());
+  const pendingAiRouteVehicleIdsRef = useRef<Set<string>>(new Set());
   const lastVehicleTickAtRef = useRef(0);
   const mapToken = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
   const activeCountry = findCountry(game.activeCountryCode);
@@ -1921,6 +1960,64 @@ export default function Page() {
       });
     });
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
+
+  useEffect(() => {
+    if (!mapToken) return;
+
+    const candidates = game.aiStations.flatMap((station) =>
+      station.vehicles
+        .filter(
+          (vehicle) =>
+            (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+            vehicle.incidentId !== null &&
+            !pendingAiRouteVehicleIdsRef.current.has(`${station.id}:${vehicle.id}:${vehicle.status}`),
+        )
+        .map((vehicle) => ({ station, vehicle })),
+    );
+    if (candidates.length === 0) return;
+
+    candidates.forEach(({ station, vehicle }) => {
+      pendingAiRouteVehicleIdsRef.current.add(`${station.id}:${vehicle.id}:${vehicle.status}`);
+    });
+
+    void Promise.all(
+      candidates.map(async ({ station, vehicle }) => {
+        const mission = game.aiMissions.find((item) => item.id === vehicle.incidentId);
+        if (!mission) return null;
+        const start = vehicle.status === "RETURNING" ? mission : station;
+        const end = vehicle.status === "RETURNING" ? station : mission;
+        const route = await fetchRoadRoute(start, end, mapToken);
+        if (!route || route.coordinates.length < 2) return null;
+        return {
+          stationId: station.id,
+          vehicleId: vehicle.id,
+          status: vehicle.status,
+          incidentId: mission.id,
+          route: route.coordinates,
+        };
+      }),
+    ).then((results) => {
+      const updates = results.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      if (updates.length === 0) return;
+      setGame((current) => ({
+        ...current,
+        aiStations: current.aiStations.map((station) => ({
+          ...station,
+          vehicles: station.vehicles.map((vehicle) => {
+            const update = updates.find(
+              (item) =>
+                item.stationId === station.id &&
+                item.vehicleId === vehicle.id &&
+                item.status === vehicle.status &&
+                item.incidentId === vehicle.incidentId,
+            );
+            if (!update) return vehicle;
+            return { ...vehicle, route: update.route };
+          }),
+        })),
+      }));
+    });
+  }, [game.aiMissions, game.aiStations, mapToken]);
 
   useEffect(() => {
     if (!mapRef.current) return;
@@ -2999,8 +3096,16 @@ export default function Page() {
           const type: StationType = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as StationType;
           const vehiclePool: VehicleType[] =
             type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
-          const lat = anchorStation.lat + (Math.random() - 0.5) * 0.35;
-          const lng = anchorStation.lng + (Math.random() - 0.5) * 0.35;
+          const blockedLocations = current.stations.map((station) => ({ lat: station.lat, lng: station.lng }));
+          const spawn = randomSpawnNearAnchor(
+            anchorStation,
+            current.activeCountryCode,
+            0.6,
+            14,
+            blockedLocations,
+          );
+          const lat = spawn.lat;
+          const lng = spawn.lng;
           const stationId = nextAiStationId;
           nextAiStations.push({
             id: stationId,
@@ -3033,8 +3138,15 @@ export default function Page() {
           const anchor = current.stations[rand(0, current.stations.length - 1)];
           const category: IncidentCategory = ["FIRE", "EMS", "POLICE"][rand(0, 2)] as IncidentCategory;
           const missionId = nextAiMissionId;
-          const lat = anchor.lat + (Math.random() - 0.5) * 0.28;
-          const lng = anchor.lng + (Math.random() - 0.5) * 0.28;
+          const spawn = randomSpawnNearAnchor(
+            anchor,
+            current.activeCountryCode,
+            0.4,
+            10,
+            current.stations.map((station) => ({ lat: station.lat, lng: station.lng })),
+          );
+          const lat = spawn.lat;
+          const lng = spawn.lng;
           const aiMission: AiMission = {
             id: missionId,
             title: `AI ${category} mission #${missionId}`,
@@ -3087,6 +3199,10 @@ export default function Page() {
                 homeLng: station.lng,
                 targetLat: mission.lat,
                 targetLng: mission.lng,
+                route: [
+                  [station.lng, station.lat],
+                  [mission.lng, mission.lat],
+                ],
               };
             });
             mission.status = "RESPONDING";
