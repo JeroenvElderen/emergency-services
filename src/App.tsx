@@ -138,6 +138,27 @@ type AiStation = {
   }[];
 };
 
+type AiCompanyLocation = {
+  name: string;
+  lat: number;
+  lng: number;
+};
+
+const OFFICIAL_AI_COMPANIES: Record<string, [AiCompanyLocation, AiCompanyLocation]> = {
+  AT: [
+    { name: "Vienna Emergency Coordination", lat: 48.2082, lng: 16.3738 },
+    { name: "Graz Regional Response", lat: 47.0707, lng: 15.4395 },
+  ],
+  BE: [
+    { name: "Brussels Emergency Coordination", lat: 50.8503, lng: 4.3517 },
+    { name: "Antwerp Regional Response", lat: 51.2194, lng: 4.4025 },
+  ],
+  BG: [
+    { name: "Sofia Emergency Coordination", lat: 42.6977, lng: 23.3219 },
+    { name: "Plovdiv Regional Response", lat: 42.1354, lng: 24.7453 },
+  ],
+};
+
 type AiMission = {
   id: number;
   title: string;
@@ -559,10 +580,27 @@ function generateCivilianZones(countryCode: string): CivilianZone[] {
 
 function createAiStations(countryCode: string, anchor?: { lat: number; lng: number }): AiStation[] {
   const country = findCountry(countryCode);
-  const stationTypes: StationType[] = ["FIRE", "EMS", "POLICE"];
+  const stationTypes: StationType[] = ["FIRE", "EMS"];
+  const fallback: [AiCompanyLocation, AiCompanyLocation] = [
+    {
+      name: `${country.name} Central Emergency Coordination`,
+      lat: country.center[1] + 0.15,
+      lng: country.center[0] - 0.15,
+    },
+    {
+      name: `${country.name} Regional Civil Protection`,
+      lat: country.center[1] - 0.15,
+      lng: country.center[0] + 0.15,
+    },
+  ];
+  const officialLocations = OFFICIAL_AI_COMPANIES[countryCode] ?? fallback;
+
   return stationTypes.map((type, index) => {
-    const vehiclePool: VehicleType[] =
-      type === "FIRE" ? ["ENGINE", "LADDER"] : type === "EMS" ? ["AMBULANCE", "RESCUE"] : ["PATROL", "SWAT"];
+    const vehiclePool: VehicleType[] = type === "FIRE" ? ["ENGINE", "LADDER"] : ["AMBULANCE", "RESCUE"];
+    const baseLocation = officialLocations[index] ?? fallback[index];
+    const nearAnchorOffset = index === 0 ? 0.03 : -0.03;
+    const stationLat = anchor ? anchor.lat + nearAnchorOffset : baseLocation.lat;
+    const stationLng = anchor ? anchor.lng - nearAnchorOffset : baseLocation.lng;
     const vehicles = Array.from({ length: 4 }, (_, vi) => ({
       id: index * 100 + vi + 1,
       type: vehiclePool[vi % vehiclePool.length],
@@ -570,16 +608,15 @@ function createAiStations(countryCode: string, anchor?: { lat: number; lng: numb
       eta: 0,
       totalEta: 0,
       incidentId: null,
-      homeLat: anchor ? anchor.lat + (Math.random() - 0.5) * 0.3 : country.center[1] + (Math.random() - 0.5) * 0.8,
-      homeLng: anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8,
+      homeLat: stationLat,
+      homeLng: stationLng,
       targetLat: null,
       targetLng: null,
     }));
-    const stationLat = anchor ? anchor.lat + (Math.random() - 0.5) * 0.3 : country.center[1] + (Math.random() - 0.5) * 0.8;
-    const stationLng = anchor ? anchor.lng + (Math.random() - 0.5) * 0.3 : country.center[0] + (Math.random() - 0.5) * 0.8;
+
     return {
       id: index + 1,
-      name: `AI ${STATION_TYPES[type].label} HQ`,
+      name: `AI ${baseLocation.name}`,
       type,
       lat: stationLat,
       lng: stationLng,
@@ -1485,10 +1522,7 @@ export default function Page() {
         activeCountryCode: countryCode,
         weatherCells: generateLocalizedWeatherCells(countryCode),
         civilianZones: generateCivilianZones(countryCode),
-        aiStations:
-          current.aiStations.length > 0
-            ? current.aiStations
-            : createAiStations(countryCode),
+        aiStations: current.aiStations,
         homeCountryCode:
           current.stations.length === 0 ? countryCode : current.homeCountryCode,
         unlockedCountryCodes: current.unlockedCountryCodes.includes(countryCode)
