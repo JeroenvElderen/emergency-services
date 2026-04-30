@@ -2028,7 +2028,12 @@ export default function Page() {
         "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 text-white shadow-lg";
       el.style.backgroundColor = markerStyle.background;
       el.title = `${incident.title} (${markerStyle.label})`;
-      el.innerHTML = "🔥";
+      el.innerHTML =
+        incident.category === "FIRE"
+          ? "🔥"
+          : incident.category === "EMS"
+            ? "🚑"
+            : "🚓";
       el.onclick = () => {
         setFocusedIncidentId(incident.id);
         mapRef.current?.flyTo({
@@ -2844,9 +2849,27 @@ export default function Page() {
           };
         });
 
-        const activeCount = nextIncidents.filter(
+        const activeIncidentsList = nextIncidents.filter(
           (incident) => incident.status !== "COMPLETE",
-        ).length;
+        );
+        const activeCount = activeIncidentsList.length;
+        const activeCategoryCounts = activeIncidentsList.reduce(
+          (counts, incident) => ({
+            ...counts,
+            [incident.category]: (counts[incident.category] ?? 0) + 1,
+          }),
+          {} as Partial<Record<IncidentCategory, number>>,
+        );
+        const serviceVehicleCounts = current.vehicles.reduce(
+          (counts, vehicle) => {
+            const serviceType = VEHICLE_TYPES[vehicle.type].stationType as IncidentCategory;
+            return {
+              ...counts,
+              [serviceType]: (counts[serviceType] ?? 0) + 1,
+            };
+          },
+          {} as Partial<Record<IncidentCategory, number>>,
+        );
         const maxActiveIncidents = Math.max(1, current.vehicles.length);
         const weatherIncidentMultiplier =
           WEATHER_EFFECTS[current.weather].incidentMultiplier;
@@ -2878,17 +2901,23 @@ export default function Page() {
             incidents: finalIncidents,
             nextIncidentId,
           });
-          if (available.length > 0) {
+          const categoryLimitedTemplates = available.filter((template) => {
+            const activeForCategory = activeCategoryCounts[template.category] ?? 0;
+            const vehiclesForCategory = serviceVehicleCounts[template.category] ?? 0;
+            return activeForCategory < vehiclesForCategory;
+          });
+          if (categoryLimitedTemplates.length > 0) {
             const activeMissionIds = new Set(
               finalIncidents
                 .filter((incident) => incident.status !== "COMPLETE")
                 .map((incident) => incident.missionId)
                 .filter((missionId): missionId is string => Boolean(missionId)),
             );
-            const rotationPool = available.filter(
+            const rotationPool = categoryLimitedTemplates.filter(
               (template) => !activeMissionIds.has(template.id),
             );
-            const templatePool = rotationPool.length > 0 ? rotationPool : available;
+            const templatePool =
+              rotationPool.length > 0 ? rotationPool : categoryLimitedTemplates;
             const template = templatePool[rand(0, templatePool.length - 1)];
 
             const primaryStage = template.stages[0];
