@@ -37,12 +37,6 @@ type RouteOption = {
   coordinates: [number, number][];
 };
 
-type RoutePreview = {
-  incidentId: number;
-  routes: RouteOption[];
-  selectedRouteKey?: string;
-};
-
 type MissionProgress = {
   eta: number;
   mission: number;
@@ -66,7 +60,6 @@ type Props = {
   dispatchCost: number;
   onDispatchVehicle: (vehicleId: number, incidentId: number, routeKey?: string) => void;
   onLoadRouteOptions: (vehicleId: number, incidentId: number) => Promise<RouteOption[]>;
-  onRoutePreviewChange: (preview: RoutePreview | null) => void;
   incomingDeliveries: IncomingDelivery[];
 };
 
@@ -101,7 +94,6 @@ export function LiveIncidentsPanel({
   dispatchCost,
   onDispatchVehicle,
   onLoadRouteOptions,
-  onRoutePreviewChange,
   incomingDeliveries,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
@@ -203,39 +195,6 @@ export function LiveIncidentsPanel({
   ]);
 
 
-  useEffect(() => {
-    if (!dispatchIncident || selectedVehicleTypes.length === 0) {
-      onRoutePreviewChange(null);
-      return;
-    }
-
-    for (const vehicleType of selectedVehicleTypes) {
-      const requiredCount = requiredTypeCounts[vehicleType] ?? 0;
-      const dispatchableVehicles = availableVehicles
-        .filter((vehicle) => vehicle.type === vehicleType)
-        .slice(0, requiredCount);
-      for (const vehicle of dispatchableVehicles) {
-        const fastestRoute = (routeChoices[vehicle.id] ?? [])[0];
-        if (fastestRoute) {
-          onRoutePreviewChange({
-            incidentId: dispatchIncident.id,
-            routes: [fastestRoute],
-            selectedRouteKey: fastestRoute.key,
-          });
-          return;
-        }
-      }
-    }
-
-    onRoutePreviewChange(null);
-  }, [
-    availableVehicles,
-    dispatchIncident,
-    onRoutePreviewChange,
-    requiredTypeCounts,
-    routeChoices,
-    selectedVehicleTypes,
-  ]);
   const deliveryTitleByType: Record<VehicleType, string> = {
     ENGINE: "New firetruck",
     LADDER: "New ladder truck",
@@ -314,7 +273,6 @@ export function LiveIncidentsPanel({
                         setDispatchIncidentId(incident.id);
                         setSelectedVehicleTypes([]);
                         setRouteChoices({});
-                        onRoutePreviewChange(null);
                       }}
                       className={`relative overflow-hidden rounded-lg border p-2 transition ${
                         focusedIncidentId === incident.id
@@ -434,7 +392,6 @@ export function LiveIncidentsPanel({
                     onDispatchVehicle(vehicle.id, dispatchIncident.id, options[0]?.key);
                   }
                 }
-                onRoutePreviewChange(null);
                 setDispatchIncidentId(null);
                 setSelectedVehicleTypes([]);
               }}
