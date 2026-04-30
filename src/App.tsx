@@ -502,6 +502,7 @@ const LEGACY_REQUIREMENT_TO_VEHICLE: Record<string, VehicleType> = {
   ambulances: "AMBULANCE",
   rescue_vehicles: "RESCUE",
   police_cars: "PATROL",
+  patrol_cars: "PATROL",
   swat: "SWAT",
 };
 
