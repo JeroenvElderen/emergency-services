@@ -1015,6 +1015,20 @@ export default function Page() {
   }, [deliveries, game]);
 
   useEffect(() => {
+    const handleReloadShortcut = (event: KeyboardEvent) => {
+      const isMacReload = event.metaKey && event.shiftKey && event.key.toLowerCase() === "r";
+      const isWindowsReload = event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "r";
+      const isF5Reload = event.key === "F5" || event.keyCode === 116;
+
+      if (!isMacReload && !isWindowsReload && !isF5Reload) return;
+      event.preventDefault();
+    };
+
+    window.addEventListener("keydown", handleReloadShortcut);
+    return () => window.removeEventListener("keydown", handleReloadShortcut);
+  }, []);
+  
+  useEffect(() => {
     if (maintenanceJobs.length === 0) return;
     const tickMaintenance = () => {
       const now = Date.now();
