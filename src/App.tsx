@@ -2719,16 +2719,20 @@ export default function Page() {
                     3600,
                 ),
               );
+              const returnRoute =
+                vehicle.route.length >= 2
+                  ? ([...vehicle.route].reverse() as [number, number][])
+                  : ([
+                      [nextIncident.lng, nextIncident.lat],
+                      [station.lng, station.lat],
+                    ] as [number, number][]);
               return {
                 ...vehicle,
                 status: "RETURNING" as VehicleStatus,
                 incidentId: nextIncident.id,
                 eta: returnEta,
                 totalEta: returnEta,
-                route: [
-                  [nextIncident.lng, nextIncident.lat],
-                  [station.lng, station.lat],
-                ],
+                route: returnRoute,
               };
             });
 
@@ -2751,70 +2755,6 @@ export default function Page() {
             currentStage: nextStage,
             stageWorkRemaining: missionStageDurationSeconds(nextIncident.severity),
             stageWorkTotal: missionStageDurationSeconds(nextIncident.severity),
-          };
-        });
-
-        const incidentIndexById = new Map(nextIncidents.map((incident, index) => [incident.id, index]));
-        nextVehicles = nextVehicles.map((vehicle) => {
-          if (vehicle.status !== "RETURNING" || vehicle.incidentId === null) return vehicle;
-
-          const sourceIncident = nextIncidents.find((incident) => incident.id === vehicle.incidentId);
-          if (!sourceIncident) return vehicle;
-
-          const station = current.stations.find((s) => s.id === vehicle.stationId);
-          if (!station) return vehicle;
-
-          const targetIncident = nextIncidents.find((candidate) => {
-            if (candidate.status === "COMPLETE" || candidate.id === sourceIncident.id) return false;
-            if (candidate.assignedVehicleIds.includes(vehicle.id)) return false;
-            const stage = candidate.stages[candidate.currentStage];
-            if (!stage) return false;
-            const requiredCounts = requirementCounts(stage.required);
-            const assignedCounts = candidate.assignedVehicleIds
-              .map((id) => nextVehicles.find((item) => item.id === id))
-              .filter((item): item is Vehicle => Boolean(item))
-              .reduce((counts, item) => ({
-                ...counts,
-                [item.type]: (counts[item.type] ?? 0) + 1,
-              }), {} as Partial<Record<VehicleType, number>>);
-            return (assignedCounts[vehicle.type] ?? 0) < (requiredCounts[vehicle.type] ?? 0);
-          });
-
-          if (!targetIncident) return vehicle;
-
-          const dispatchUpgrade = 1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
-          const transferKm = haversineKm(sourceIncident, targetIncident);
-          const transferEta = Math.max(
-            8,
-            Math.round(
-              (transferKm /
-                resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
-                3600,
-            ),
-          );
-
-          const targetIndex = incidentIndexById.get(targetIncident.id);
-          if (typeof targetIndex === "number") {
-            const existing = nextIncidents[targetIndex];
-            nextIncidents[targetIndex] = {
-              ...existing,
-              status: "RESPONDING",
-              assignedVehicleIds: existing.assignedVehicleIds.includes(vehicle.id)
-                ? existing.assignedVehicleIds
-                : [...existing.assignedVehicleIds, vehicle.id],
-            };
-          }
-
-          return {
-            ...vehicle,
-            status: "DISPATCHED" as VehicleStatus,
-            incidentId: targetIncident.id,
-            eta: transferEta,
-            totalEta: transferEta,
-            route: [
-              [sourceIncident.lng, sourceIncident.lat],
-              [targetIncident.lng, targetIncident.lat],
-            ],
           };
         });
 
