@@ -2303,19 +2303,27 @@ export default function Page() {
     const station = game.stations.find((s) => s.id === vehicle.stationId);
     if (!station) return;
 
-    const routeOptions = await fetchRoadRoute(station, incident, mapToken, true);
+    const dispatchOrigin =
+      vehicle.status === "RETURNING" && vehicle.route.length >= 2
+        ? (() => {
+            const [lng, lat] = getRoutePosition(vehicle.route, getSmoothedProgress(vehicle), station);
+            return { lng, lat };
+          })()
+        : station;
+
+    const routeOptions = await fetchRoadRoute(dispatchOrigin, incident, mapToken, true);
     const selectedOption =
       Array.isArray(routeOptions) && routeKey
         ? routeOptions.find((_, idx) => `route-${idx + 1}` === routeKey)
         : null;
     const route = selectedOption ?? (Array.isArray(routeOptions) ? routeOptions[0] : routeOptions);
-    const km = route?.distanceKm ?? haversineKm(station, incident);
+    const km = route?.distanceKm ?? haversineKm(dispatchOrigin, incident);
     const dispatchUpgrade =
       1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
     const speed = resolveVehicleSpeedKmh(vehicle, game.weather, dispatchUpgrade);
     const eta = Math.max(8, Math.round((km / speed) * 3600));
 
-    const roadStart = nudgePointToward(station, incident);
+    const roadStart = nudgePointToward(dispatchOrigin, incident);
     const roadRoute = route
       ? ([roadStart, ...route.coordinates.slice(1)] as [number, number][])
       : null;
@@ -2351,7 +2359,7 @@ export default function Page() {
                   roadRoute && roadRoute.length >= 2
                     ? roadRoute
                     : [
-                        [station.lng, station.lat],
+                        [dispatchOrigin.lng, dispatchOrigin.lat],
                         [incident.lng, incident.lat],
                       ],
               }
@@ -2381,11 +2389,19 @@ export default function Page() {
     const station = game.stations.find((entry) => entry.id === vehicle.stationId);
     if (!station) return [];
 
+    const dispatchOrigin =
+      vehicle.status === "RETURNING" && vehicle.route.length >= 2
+        ? (() => {
+            const [lng, lat] = getRoutePosition(vehicle.route, getSmoothedProgress(vehicle), station);
+            return { lng, lat };
+          })()
+        : station;
+
     const dispatchUpgrade = 1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
     const speed = resolveVehicleSpeedKmh(vehicle, game.weather, dispatchUpgrade);
     const colors = ["#ef4444", "#22c55e", "#3b82f6"];
 
-    const routeOptions = await fetchRoadRoute(station, incident, mapToken, true);
+    const routeOptions = await fetchRoadRoute(dispatchOrigin, incident, mapToken, true);
     if (!Array.isArray(routeOptions)) return [];
     return routeOptions.slice(0, 3).map((route, idx) => ({
       key: `route-${idx + 1}`,
