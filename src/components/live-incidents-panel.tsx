@@ -54,6 +54,11 @@ type MissionProgress = {
 
 type IncidentFlightPhase = "NEW" | "ENROUTE" | "ON SCENE" | "RETURN";
 
+type IncomingDelivery = {
+  id: number;
+  vehicleType: VehicleType;
+};
+
 type Props = {
   activeIncidents: IncidentLike[];
   focusedIncidentId: number | null;
@@ -64,6 +69,7 @@ type Props = {
   onDispatchVehicle: (vehicleId: number, incidentId: number, routeKey?: string) => void;
   onLoadRouteOptions: (vehicleId: number, incidentId: number) => Promise<RouteOption[]>;
   onRoutePreviewChange: (preview: RoutePreview | null) => void;
+  incomingDeliveries: IncomingDelivery[];
 };
 
 function Badge({
@@ -98,6 +104,7 @@ export function LiveIncidentsPanel({
   onDispatchVehicle,
   onLoadRouteOptions,
   onRoutePreviewChange,
+  incomingDeliveries,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
@@ -150,6 +157,15 @@ export function LiveIncidentsPanel({
     return "blue";
   };
 
+  const deliveryTitleByType: Record<VehicleType, string> = {
+    ENGINE: "New firetruck",
+    LADDER: "New ladder truck",
+    AMBULANCE: "New ambulance",
+    RESCUE: "New rescue unit",
+    PATROL: "New patrol car",
+    SWAT: "New tactical truck",
+  };
+
   const getCardProgressFillClass = (colorClass: string) => {
     if (colorClass.includes("amber")) return "bg-amber-500/18";
     if (colorClass.includes("emerald")) return "bg-emerald-500/18";
@@ -189,6 +205,18 @@ export function LiveIncidentsPanel({
                 <Badge tone={getFlightPhaseTone(phase)}>{phase}</Badge>
                 <span className="text-[10px] text-slate-400">{incidentsByPhase[phase].length}</span>
               </div>
+              {phase === "ENROUTE" && incomingDeliveries.length > 0 && (
+                <div className="space-y-1">
+                  {incomingDeliveries.map((delivery) => (
+                    <div
+                      key={`delivery-${delivery.id}`}
+                      className="rounded-lg border border-amber-500/60 bg-amber-950/20 p-2"
+                    >
+                      <p className="text-xs font-semibold text-amber-200">{deliveryTitleByType[delivery.vehicleType]}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
               {incidentsByPhase[phase].length === 0 ? (
                 <p className="px-1 py-2 text-[10px] text-slate-500">No incidents</p>
               ) : (

@@ -64,6 +64,7 @@ type VehicleDelivery = {
   progress: number;
   from: [number, number];
   to: [number, number];
+  route: [number, number][];
 };
 
 type Vehicle = {
@@ -236,6 +237,7 @@ type EuCountry = {
   code: string;
   name: string;
   center: [number, number];
+  capital: [number, number];
   zoom: number;
   bounds: {
     minLng: number;
@@ -246,33 +248,33 @@ type EuCountry = {
 };
 
 const EU_COUNTRIES: EuCountry[] = [
-  { code: "AT", name: "Austria", center: [14.2, 47.6], zoom: 6.5, bounds: { minLng: 9.4, maxLng: 17.2, minLat: 46.2, maxLat: 49.1 } },
-  { code: "BE", name: "Belgium", center: [4.6, 50.8], zoom: 7.5, bounds: { minLng: 2.4, maxLng: 6.4, minLat: 49.4, maxLat: 51.7 } },
-  { code: "BG", name: "Bulgaria", center: [25.3, 42.8], zoom: 6.4, bounds: { minLng: 22.3, maxLng: 28.7, minLat: 41.2, maxLat: 44.3 } },
-  { code: "HR", name: "Croatia", center: [16.8, 45.2], zoom: 6.5, bounds: { minLng: 13.4, maxLng: 19.5, minLat: 42.2, maxLat: 46.6 } },
-  { code: "CY", name: "Cyprus", center: [33.0, 35.1], zoom: 8.2, bounds: { minLng: 32.0, maxLng: 34.9, minLat: 34.4, maxLat: 35.8 } },
-  { code: "CZ", name: "Czechia", center: [15.5, 49.9], zoom: 6.8, bounds: { minLng: 12.0, maxLng: 18.9, minLat: 48.5, maxLat: 51.1 } },
-  { code: "DK", name: "Denmark", center: [10.0, 56.1], zoom: 6.7, bounds: { minLng: 7.8, maxLng: 12.7, minLat: 54.5, maxLat: 57.8 } },
-  { code: "EE", name: "Estonia", center: [25.4, 58.7], zoom: 6.8, bounds: { minLng: 21.7, maxLng: 28.2, minLat: 57.5, maxLat: 59.8 } },
-  { code: "FI", name: "Finland", center: [25.7, 64.3], zoom: 4.8, bounds: { minLng: 20.5, maxLng: 31.8, minLat: 59.7, maxLat: 70.2 } },
-  { code: "FR", name: "France", center: [2.4, 46.3], zoom: 5.2, bounds: { minLng: -5.3, maxLng: 9.8, minLat: 41.1, maxLat: 51.2 } },
-  { code: "DE", name: "Germany", center: [10.4, 51.1], zoom: 5.8, bounds: { minLng: 5.8, maxLng: 15.1, minLat: 47.1, maxLat: 55.1 } },
-  { code: "GR", name: "Greece", center: [22.8, 39.1], zoom: 6, bounds: { minLng: 19.4, maxLng: 28.3, minLat: 34.6, maxLat: 41.9 } },
-  { code: "HU", name: "Hungary", center: [19.3, 47.1], zoom: 7, bounds: { minLng: 16.0, maxLng: 22.9, minLat: 45.7, maxLat: 48.7 } },
-  { code: "IE", name: "Ireland", center: [-8.2, 53.3], zoom: 6.2, bounds: { minLng: -10.8, maxLng: -5.3, minLat: 51.4, maxLat: 55.5 } },
-  { code: "IT", name: "Italy", center: [12.7, 42.9], zoom: 5.5, bounds: { minLng: 6.6, maxLng: 18.7, minLat: 36.6, maxLat: 47.2 } },
-  { code: "LV", name: "Latvia", center: [24.9, 56.9], zoom: 7, bounds: { minLng: 20.9, maxLng: 28.3, minLat: 55.6, maxLat: 58.1 } },
-  { code: "LT", name: "Lithuania", center: [23.8, 55.3], zoom: 7, bounds: { minLng: 20.9, maxLng: 26.9, minLat: 53.9, maxLat: 56.6 } },
-  { code: "LU", name: "Luxembourg", center: [6.1, 49.8], zoom: 8.4, bounds: { minLng: 5.7, maxLng: 6.6, minLat: 49.4, maxLat: 50.2 } },
-  { code: "MT", name: "Malta", center: [14.4, 35.9], zoom: 10, bounds: { minLng: 14.1, maxLng: 14.7, minLat: 35.8, maxLat: 36.1 } },
-  { code: "NL", name: "Netherlands", center: [5.3, 52.2], zoom: 7, bounds: { minLng: 3.2, maxLng: 7.3, minLat: 50.6, maxLat: 53.7 } },
-  { code: "PL", name: "Poland", center: [19.2, 52.1], zoom: 6, bounds: { minLng: 14.1, maxLng: 24.2, minLat: 49.0, maxLat: 54.9 } },
-  { code: "PT", name: "Portugal", center: [-8.0, 39.7], zoom: 6, bounds: { minLng: -9.6, maxLng: -6.1, minLat: 36.8, maxLat: 42.2 } },
-  { code: "RO", name: "Romania", center: [24.9, 45.9], zoom: 6.2, bounds: { minLng: 20.2, maxLng: 29.8, minLat: 43.6, maxLat: 48.3 } },
-  { code: "SK", name: "Slovakia", center: [19.5, 48.7], zoom: 7, bounds: { minLng: 16.8, maxLng: 22.8, minLat: 47.7, maxLat: 49.7 } },
-  { code: "SI", name: "Slovenia", center: [14.9, 46.1], zoom: 7.6, bounds: { minLng: 13.3, maxLng: 16.6, minLat: 45.4, maxLat: 46.9 } },
-  { code: "ES", name: "Spain", center: [-3.7, 40.3], zoom: 5.5, bounds: { minLng: -9.4, maxLng: 3.4, minLat: 35.8, maxLat: 43.9 } },
-  { code: "SE", name: "Sweden", center: [16.0, 62.0], zoom: 4.6, bounds: { minLng: 11.0, maxLng: 24.2, minLat: 55.3, maxLat: 69.2 } },
+  { code: "AT", name: "Austria", center: [14.2, 47.6], capital: [16.3738, 48.2082], zoom: 6.5, bounds: { minLng: 9.4, maxLng: 17.2, minLat: 46.2, maxLat: 49.1 } },
+  { code: "BE", name: "Belgium", center: [4.6, 50.8], capital: [4.3517, 50.8503], zoom: 7.5, bounds: { minLng: 2.4, maxLng: 6.4, minLat: 49.4, maxLat: 51.7 } },
+  { code: "BG", name: "Bulgaria", center: [25.3, 42.8], capital: [23.3219, 42.6977], zoom: 6.4, bounds: { minLng: 22.3, maxLng: 28.7, minLat: 41.2, maxLat: 44.3 } },
+  { code: "HR", name: "Croatia", center: [16.8, 45.2], capital: [15.9819, 45.815], zoom: 6.5, bounds: { minLng: 13.4, maxLng: 19.5, minLat: 42.2, maxLat: 46.6 } },
+  { code: "CY", name: "Cyprus", center: [33.0, 35.1], capital: [33.3823, 35.1856], zoom: 8.2, bounds: { minLng: 32.0, maxLng: 34.9, minLat: 34.4, maxLat: 35.8 } },
+  { code: "CZ", name: "Czechia", center: [15.5, 49.9], capital: [14.4378, 50.0755], zoom: 6.8, bounds: { minLng: 12.0, maxLng: 18.9, minLat: 48.5, maxLat: 51.1 } },
+  { code: "DK", name: "Denmark", center: [10.0, 56.1], capital: [12.5683, 55.6761], zoom: 6.7, bounds: { minLng: 7.8, maxLng: 12.7, minLat: 54.5, maxLat: 57.8 } },
+  { code: "EE", name: "Estonia", center: [25.4, 58.7], capital: [24.7536, 59.437], zoom: 6.8, bounds: { minLng: 21.7, maxLng: 28.2, minLat: 57.5, maxLat: 59.8 } },
+  { code: "FI", name: "Finland", center: [25.7, 64.3], capital: [24.9384, 60.1699], zoom: 4.8, bounds: { minLng: 20.5, maxLng: 31.8, minLat: 59.7, maxLat: 70.2 } },
+  { code: "FR", name: "France", center: [2.4, 46.3], capital: [2.3522, 48.8566], zoom: 5.2, bounds: { minLng: -5.3, maxLng: 9.8, minLat: 41.1, maxLat: 51.2 } },
+  { code: "DE", name: "Germany", center: [10.4, 51.1], capital: [13.405, 52.52], zoom: 5.8, bounds: { minLng: 5.8, maxLng: 15.1, minLat: 47.1, maxLat: 55.1 } },
+  { code: "GR", name: "Greece", center: [22.8, 39.1], capital: [23.7275, 37.9838], zoom: 6, bounds: { minLng: 19.4, maxLng: 28.3, minLat: 34.6, maxLat: 41.9 } },
+  { code: "HU", name: "Hungary", center: [19.3, 47.1], capital: [19.0402, 47.4979], zoom: 7, bounds: { minLng: 16.0, maxLng: 22.9, minLat: 45.7, maxLat: 48.7 } },
+  { code: "IE", name: "Ireland", center: [-8.2, 53.3], capital: [-6.2603, 53.3498], zoom: 6.2, bounds: { minLng: -10.8, maxLng: -5.3, minLat: 51.4, maxLat: 55.5 } },
+  { code: "IT", name: "Italy", center: [12.7, 42.9], capital: [12.4964, 41.9028], zoom: 5.5, bounds: { minLng: 6.6, maxLng: 18.7, minLat: 36.6, maxLat: 47.2 } },
+  { code: "LV", name: "Latvia", center: [24.9, 56.9], capital: [24.1052, 56.9496], zoom: 7, bounds: { minLng: 20.9, maxLng: 28.3, minLat: 55.6, maxLat: 58.1 } },
+  { code: "LT", name: "Lithuania", center: [23.8, 55.3], capital: [25.2797, 54.6872], zoom: 7, bounds: { minLng: 20.9, maxLng: 26.9, minLat: 53.9, maxLat: 56.6 } },
+  { code: "LU", name: "Luxembourg", center: [6.1, 49.8], capital: [6.1319, 49.6116], zoom: 8.4, bounds: { minLng: 5.7, maxLng: 6.6, minLat: 49.4, maxLat: 50.2 } },
+  { code: "MT", name: "Malta", center: [14.4, 35.9], capital: [14.5146, 35.8989], zoom: 10, bounds: { minLng: 14.1, maxLng: 14.7, minLat: 35.8, maxLat: 36.1 } },
+  { code: "NL", name: "Netherlands", center: [5.3, 52.2], capital: [4.9041, 52.3676], zoom: 7, bounds: { minLng: 3.2, maxLng: 7.3, minLat: 50.6, maxLat: 53.7 } },
+  { code: "PL", name: "Poland", center: [19.2, 52.1], capital: [21.0122, 52.2297], zoom: 6, bounds: { minLng: 14.1, maxLng: 24.2, minLat: 49.0, maxLat: 54.9 } },
+  { code: "PT", name: "Portugal", center: [-8.0, 39.7], capital: [-9.1393, 38.7223], zoom: 6, bounds: { minLng: -9.6, maxLng: -6.1, minLat: 36.8, maxLat: 42.2 } },
+  { code: "RO", name: "Romania", center: [24.9, 45.9], capital: [26.1025, 44.4268], zoom: 6.2, bounds: { minLng: 20.2, maxLng: 29.8, minLat: 43.6, maxLat: 48.3 } },
+  { code: "SK", name: "Slovakia", center: [19.5, 48.7], capital: [17.1077, 48.1486], zoom: 7, bounds: { minLng: 16.8, maxLng: 22.8, minLat: 47.7, maxLat: 49.7 } },
+  { code: "SI", name: "Slovenia", center: [14.9, 46.1], capital: [14.5058, 46.0569], zoom: 7.6, bounds: { minLng: 13.3, maxLng: 16.6, minLat: 45.4, maxLat: 46.9 } },
+  { code: "ES", name: "Spain", center: [-3.7, 40.3], capital: [-3.7038, 40.4168], zoom: 5.5, bounds: { minLng: -9.4, maxLng: 3.4, minLat: 35.8, maxLat: 43.9 } },
+  { code: "SE", name: "Sweden", center: [16.0, 62.0], capital: [18.0686, 59.3293], zoom: 4.6, bounds: { minLng: 11.0, maxLng: 24.2, minLat: 55.3, maxLat: 69.2 } },
 ];
 
 const findCountryByLocation = (lat: number, lng: number) =>
@@ -288,8 +290,8 @@ const getCountryDepot = (countryCode: string): CountryDepot => {
   const country = findCountry(countryCode);
   return {
     countryCode,
-    lat: country.bounds.minLat + (country.bounds.maxLat - country.bounds.minLat) * 0.2,
-    lng: country.bounds.minLng + (country.bounds.maxLng - country.bounds.minLng) * 0.2,
+    lat: country.capital[1],
+    lng: country.capital[0],
   };
 };
 
@@ -879,7 +881,7 @@ export default function Page() {
   const activeCountry = findCountry(game.activeCountryCode);
   const mapStyleUrl =
     mapVisualStyle === "SATELLITE_3D"
-      ? "mapbox://styles/mapbox/satellite-streets-v12"
+      ? "mapbox://styles/mapbox/streets-v12"
       : "mapbox://styles/mapbox/dark-v11";
 
   const isWithinCountryBounds = useCallback(
@@ -1751,7 +1753,11 @@ export default function Page() {
     });
 
     deliveries.forEach((delivery) => {
-      const [lng, lat] = getRoutePosition([delivery.from, delivery.to], delivery.progress, { lat: delivery.to[1], lng: delivery.to[0] });
+      const [lng, lat] = getRoutePosition(
+        delivery.route.length >= 2 ? delivery.route : [delivery.from, delivery.to],
+        delivery.progress,
+        { lat: delivery.to[1], lng: delivery.to[0] },
+      );
       const existing = deliveryMarkerRefs.current.get(delivery.id);
       if (existing) {
         existing.setLngLat([lng, lat]);
@@ -2104,12 +2110,20 @@ export default function Page() {
     }
   }
 
-  function buyVehicle(stationId: number, type: VehicleType) {
+  async function buyVehicle(stationId: number, type: VehicleType) {
     const station = game.stations.find((item) => item.id === stationId);
     if (!station) return;
     const stationCountry = findCountryByLocation(station.lat, station.lng);
     if (!stationCountry) return;
     const depot = getCountryDepot(stationCountry.code);
+    const depotPoint = { lat: depot.lat, lng: depot.lng };
+    const stationPoint = { lat: station.lat, lng: station.lng };
+    const roadRouteResult = await fetchRoadRoute(depotPoint, stationPoint, mapToken, false);
+    const roadRoute = Array.isArray(roadRouteResult) ? roadRouteResult[0] : roadRouteResult;
+    const deliveryRoute =
+      roadRoute?.coordinates && roadRoute.coordinates.length >= 2
+        ? ([[depot.lng, depot.lat], ...roadRoute.coordinates.slice(1)] as [number, number][])
+        : ([ [depot.lng, depot.lat], [station.lng, station.lat] ] as [number, number][]);
 
     const deliveryId = Date.now() + Math.floor(Math.random() * 1000);
     setDeliveries((current) => [
@@ -2121,10 +2135,12 @@ export default function Page() {
         progress: 0,
         from: [depot.lng, depot.lat],
         to: [station.lng, station.lat],
+        route: deliveryRoute,
       },
     ]);
 
-    const deliverySeconds = Math.max(6, Math.round(haversineKm({ lat: depot.lat, lng: depot.lng }, station) * 40));
+    const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
+    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
 
     const interval = window.setInterval(() => {
       setDeliveries((current) =>
@@ -3032,6 +3048,10 @@ export default function Page() {
         onDispatchVehicle={dispatch}
         onLoadRouteOptions={loadRouteOptions}
         onRoutePreviewChange={setRoutePreview}
+        incomingDeliveries={deliveries.map((delivery) => ({
+          id: delivery.id,
+          vehicleType: delivery.vehicleType,
+        }))}
       />
     </main>
   );
