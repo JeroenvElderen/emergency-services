@@ -52,8 +52,6 @@ type MissionProgress = {
   colorClass: string;
 };
 
-type IncidentFlightPhase = "NEW" | "ENROUTE" | "ON SCENE" | "RETURN";
-
 type IncomingDelivery = {
   id: number;
   vehicleType: VehicleType;
@@ -123,39 +121,14 @@ export function LiveIncidentsPanel({
     [vehicles],
   );
 
-
-  const getFlightPhase = (incident: IncidentLike, progress: MissionProgress): IncidentFlightPhase => {
-    if (incident.assignedVehicleIds.length === 0) return "NEW";
-    if (progress.mission < 0.85) return "ENROUTE";
-    if (progress.returnTrip < 0.95) return "ON SCENE";
-    return "RETURN";
-  };
-
-  const phaseOrder: IncidentFlightPhase[] = ["NEW", "ENROUTE", "ON SCENE", "RETURN"];
-
-  const incidentsByPhase = useMemo(() => {
-    const grouped = Object.fromEntries(
-      phaseOrder.map((phase) => [phase, [] as Array<{ incident: IncidentLike; progress: MissionProgress }>]),
-    ) as Record<IncidentFlightPhase, Array<{ incident: IncidentLike; progress: MissionProgress }>>;
-
-    for (const incident of activeIncidents) {
-      const progress = missionProgress(incident);
-      const phase = getFlightPhase(incident, progress);
-      grouped[phase].push({ incident, progress });
-    }
-
-    for (const phase of phaseOrder) {
-      grouped[phase].sort((a, b) => b.incident.id - a.incident.id);
-    }
-
-    return grouped;
-  }, [activeIncidents, missionProgress]);
-
-  const getFlightPhaseTone = (phase: IncidentFlightPhase): "warn" | "blue" | "good" => {
-    if (phase === "NEW") return "warn";
-    if (phase === "RETURN") return "good";
-    return "blue";
-  };
+  const newIncidents = useMemo(
+    () =>
+      activeIncidents
+        .filter((incident) => incident.assignedVehicleIds.length === 0)
+        .map((incident) => ({ incident, progress: missionProgress(incident) }))
+        .sort((a, b) => b.incident.id - a.incident.id),
+    [activeIncidents, missionProgress],
+  );
 
   const deliveryTitleByType: Record<VehicleType, string> = {
     ENGINE: "New firetruck",
@@ -180,12 +153,12 @@ export function LiveIncidentsPanel({
         className="absolute bottom-2 right-2 z-30 md:hidden"
         onClick={() => setMobileBoardOpen((open) => !open)}
       >
-        {mobileBoardOpen ? "Hide incidents" : `Incidents (${activeIncidents.length})`}
+        {mobileBoardOpen ? "Hide popups" : `Popups (${newIncidents.length})`}
       </Button>
 
       <div className={`absolute bottom-2 left-2 right-2 z-30 max-h-[42vh] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-sm md:bottom-3 md:left-auto md:right-3 md:max-h-[45vh] md:w-[min(96vw,1100px)] md:p-2.5 ${mobileBoardOpen ? "block" : "hidden"} md:block`}>
       <div className="flex items-center justify-between">
-        <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">Live Incidents</h2>
+        <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">New Incident Popups</h2>
         <Button
           size="sm"
           variant="outline"
@@ -195,32 +168,28 @@ export function LiveIncidentsPanel({
           Close
         </Button>
       </div>
-      {activeIncidents.length === 0 ? (
-        <p className="text-xs text-slate-400">No active incidents.</p>
+      {newIncidents.length === 0 ? (
+        <p className="text-xs text-slate-400">No new incidents.</p>
       ) : (
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-          {phaseOrder.map((phase) => (
-            <div key={phase} className="space-y-1.5 rounded-lg border border-slate-800/80 bg-slate-900/70 p-1.5">
-              <div className="flex items-center justify-between">
-                <Badge tone={getFlightPhaseTone(phase)}>{phase}</Badge>
-                <span className="text-[10px] text-slate-400">{incidentsByPhase[phase].length}</span>
-              </div>
-              {phase === "ENROUTE" && incomingDeliveries.length > 0 && (
-                <div className="space-y-1">
-                  {incomingDeliveries.map((delivery) => (
-                    <div
-                      key={`delivery-${delivery.id}`}
-                      className="rounded-lg border border-amber-500/60 bg-amber-950/20 p-2"
-                    >
-                      <p className="text-xs font-semibold text-amber-200">{deliveryTitleByType[delivery.vehicleType]}</p>
-                    </div>
-                  ))}
+        <div className="space-y-1.5 rounded-lg border border-slate-800/80 bg-slate-900/70 p-1.5">
+          <div className="flex items-center justify-between">
+            <Badge tone="warn">NEW</Badge>
+            <span className="text-[10px] text-slate-400">{newIncidents.length}</span>
+          </div>
+          {incomingDeliveries.length > 0 && (
+            <div className="space-y-1">
+              {incomingDeliveries.map((delivery) => (
+                <div
+                  key={`delivery-${delivery.id}`}
+                  className="rounded-lg border border-amber-500/60 bg-amber-950/20 p-2"
+                >
+                  <p className="text-xs font-semibold text-amber-200">{deliveryTitleByType[delivery.vehicleType]}</p>
                 </div>
-              )}
-              {incidentsByPhase[phase].length === 0 ? (
-                <p className="px-1 py-2 text-[10px] text-slate-500">No incidents</p>
-              ) : (
-                incidentsByPhase[phase].map(({ incident, progress }) => {
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {newIncidents.map(({ incident, progress }) => {
                   const stage = incident.stages[incident.currentStage];
                   const completionClass = progress.overall >= 0.85
                     ? "ring-1 ring-emerald-500/50"
@@ -260,10 +229,8 @@ export function LiveIncidentsPanel({
               </div>
               </button>
                   );
-                })
-              )}
-              </div>
-              ))}
+                })}
+          </div>
         </div>
       )}
       </div>
