@@ -1863,7 +1863,10 @@ export default function Page() {
           "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-100 bg-violet-500 text-white shadow-lg";
         el.innerHTML = "+";
         el.title = `Build at ${site.name}`;
-        el.onclick = () => {
+        
+        const handleRealStationSelect = (event: Event) => {
+          event.preventDefault();
+          event.stopPropagation();
           const accepted = window.confirm(
             `Build ${STATION_TYPES[selectedBuild].label} station at ${site.name}?`,
           );
@@ -1872,6 +1875,9 @@ export default function Page() {
           setIsSelectingRealStation(false);
           setBuildPickerOpen(false);
         };
+
+        el.addEventListener("click", handleRealStationSelect);
+        el.addEventListener("touchend", handleRealStationSelect, { passive: false });
 
         realStationMarkerRefs.current.push(
           new mapboxgl.Marker({ element: el, anchor: "center" })
@@ -2816,7 +2822,10 @@ export default function Page() {
             <Button
               size="sm"
               className="mt-2 w-full"
-              onClick={() => setIsSelectingRealStation(true)}
+              onClick={() => {
+                setIsSelectingRealStation(true);
+                setBuildPickerOpen(false);
+              }}
             >
               Select real station on map
             </Button>
