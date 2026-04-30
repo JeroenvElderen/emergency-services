@@ -1367,21 +1367,47 @@ export default function Page() {
     const query = `[out:json][timeout:25];(${typeQuery});out center tags;`;
 
     try {
-      const response = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST",
-        body: query,
-      });
-      if (!response.ok) return;
+      const endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+      ];
+      let data:
+        | {
+            elements?: {
+              id: number;
+              lat?: number;
+              lon?: number;
+              center?: { lat: number; lon: number };
+              tags?: { name?: string };
+            }[];
+          }
+        | null = null;
 
-      const data = (await response.json()) as {
-        elements?: {
-          id: number;
-          lat?: number;
-          lon?: number;
-          center?: { lat: number; lon: number };
-          tags?: { name?: string };
-        }[];
-      };
+      for (const endpoint of endpoints) {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          },
+          body: new URLSearchParams({ data: query }),
+        });
+        if (!response.ok) continue;
+        data = (await response.json()) as {
+          elements?: {
+            id: number;
+            lat?: number;
+            lon?: number;
+            center?: { lat: number; lon: number };
+            tags?: { name?: string };
+          }[];
+        };
+        break;
+      }
+      if (!data) {
+        setRealStations([]);
+        return;
+      }
+
       const sites =
         data.elements
           ?.map((item) => {
