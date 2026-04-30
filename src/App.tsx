@@ -77,6 +77,7 @@ type Vehicle = {
   totalEta: number;
   incidentId: number | null;
   route: [number, number][];
+  speedFactor: number;
 };
 
 type IncidentStage = {
@@ -211,6 +212,15 @@ const COUNTRY_LICENSE_COST = 100000;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const WEATHER_INTERVAL_SECONDS = 75;
+const VEHICLE_SPEED_VARIANCE = {
+  min: 0.82,
+  max: 1.18,
+};
+const LAW_COMPLIANCE = {
+  maxRoadSpeedKmh: 120,
+  junctionDelayMultiplier: 0.9,
+  safeFloorKmh: 20,
+};
 const WEATHER_EFFECTS: Record<
   GameState["weather"],
   { speedMultiplier: number; incidentMultiplier: number; label: string }
@@ -246,6 +256,33 @@ type EuCountry = {
     maxLat: number;
   };
 };
+
+
+function createVehicleSpeedFactor() {
+  const { min, max } = VEHICLE_SPEED_VARIANCE;
+  return Number((min + Math.random() * (max - min)).toFixed(2));
+}
+
+function resolveVehicleSpeedKmh(
+  vehicle: Vehicle,
+  weather: GameState["weather"],
+  dispatchUpgrade: number,
+) {
+  const weatherMultiplier = WEATHER_EFFECTS[weather].speedMultiplier;
+  const traffic = getRushHourModifier();
+  const rawSpeed =
+    VEHICLE_TYPES[vehicle.type].speedKmh *
+    (vehicle.speedFactor || 1) *
+    weatherMultiplier *
+    traffic.trafficMultiplier *
+    dispatchUpgrade;
+
+  const lawCompliantSpeed = Math.min(rawSpeed, LAW_COMPLIANCE.maxRoadSpeedKmh);
+  const withJunctionDelay =
+    lawCompliantSpeed * LAW_COMPLIANCE.junctionDelayMultiplier;
+
+  return Math.max(withJunctionDelay, LAW_COMPLIANCE.safeFloorKmh);
+}
 
 const EU_COUNTRIES: EuCountry[] = [
   { code: "AT", name: "Austria", center: [14.2, 47.6], capital: [16.3738, 48.2082], zoom: 6.5, bounds: { minLng: 9.4, maxLng: 17.2, minLat: 46.2, maxLat: 49.1 } },
@@ -663,6 +700,8 @@ function loadGame(): GameState {
       vehicles: parsed.vehicles.map((vehicle) => ({
         ...vehicle,
         route: Array.isArray(vehicle.route) ? vehicle.route : [],
+        speedFactor:
+          typeof vehicle.speedFactor === "number" ? vehicle.speedFactor : 1,
       })),
     };
   } catch {
@@ -1257,6 +1296,7 @@ export default function Page() {
               totalEta: 0,
               incidentId: null,
               route: [],
+              speedFactor: createVehicleSpeedFactor(),
             },
             {
               id: nextVehicleId + 1,
@@ -1268,6 +1308,7 @@ export default function Page() {
               totalEta: 0,
               incidentId: null,
               route: [],
+              speedFactor: createVehicleSpeedFactor(),
             },
           ];
           nextVehicleId += 2;
@@ -1613,19 +1654,13 @@ export default function Page() {
 
           const station = current.stations.find((s) => s.id === vehicle.stationId);
           if (!station) return vehicle;
-          const weatherMultiplier =
-            WEATHER_EFFECTS[current.weather].speedMultiplier;
-          const traffic = getRushHourModifier();
           const dispatchUpgrade =
             1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
           const newTotalEta = Math.max(
             8,
             Math.round(
               (update.distanceKm /
-                (VEHICLE_TYPES[vehicle.type].speedKmh *
-                  weatherMultiplier *
-                  traffic.trafficMultiplier *
-                  dispatchUpgrade)) *
+                resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
                 3600,
             ),
           );
@@ -2054,15 +2089,9 @@ export default function Page() {
         : null;
     const route = selectedOption ?? (Array.isArray(routeOptions) ? routeOptions[0] : routeOptions);
     const km = route?.distanceKm ?? haversineKm(station, incident);
-    const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
-    const traffic = getRushHourModifier();
     const dispatchUpgrade =
       1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
-    const speed =
-      VEHICLE_TYPES[vehicle.type].speedKmh *
-      weatherMultiplier *
-      traffic.trafficMultiplier *
-      dispatchUpgrade;
+    const speed = resolveVehicleSpeedKmh(vehicle, game.weather, dispatchUpgrade);
     const eta = Math.max(8, Math.round((km / speed) * 3600));
 
     const roadStart = nudgePointToward(station, incident);
@@ -2131,14 +2160,8 @@ export default function Page() {
     const station = game.stations.find((entry) => entry.id === vehicle.stationId);
     if (!station) return [];
 
-    const weatherMultiplier = WEATHER_EFFECTS[game.weather].speedMultiplier;
-    const traffic = getRushHourModifier();
     const dispatchUpgrade = 1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
-    const speed =
-      VEHICLE_TYPES[vehicle.type].speedKmh *
-      weatherMultiplier *
-      traffic.trafficMultiplier *
-      dispatchUpgrade;
+    const speed = resolveVehicleSpeedKmh(vehicle, game.weather, dispatchUpgrade);
     const colors = ["#ef4444", "#22c55e", "#3b82f6"];
 
     const routeOptions = await fetchRoadRoute(station, incident, mapToken, true);
@@ -2242,6 +2265,7 @@ export default function Page() {
           totalEta: 0,
           incidentId: null,
           route: [],
+          speedFactor: createVehicleSpeedFactor(),
         };
 
         return {
@@ -2440,19 +2464,13 @@ export default function Page() {
                 );
                 if (!station) return vehicle;
                 const returnKm = haversineKm(station, nextIncident);
-                const weatherMultiplier =
-                  WEATHER_EFFECTS[current.weather].speedMultiplier;
-                const traffic = getRushHourModifier();
                 const dispatchUpgrade =
                   1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
                 const returnEta = Math.max(
                   8,
                   Math.round(
                     (returnKm /
-                      (VEHICLE_TYPES[vehicle.type].speedKmh *
-                        weatherMultiplier *
-                        traffic.trafficMultiplier *
-                        dispatchUpgrade)) *
+                      resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
                       3600,
                   ),
                 );
