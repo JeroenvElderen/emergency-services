@@ -2604,7 +2604,15 @@ export default function Page() {
 
   function resetGame() {
     localStorage.removeItem("emergency-services-save-v2");
+    localStorage.removeItem("emergency-services-deliveries-v1");
     setGame(initialState);
+    setDeliveries([]);
+    setMaintenanceJobs([]);
+    setVehicleOrderModal(null);
+    setFocusedIncidentId(null);
+    setIncidentNotifications([]);
+    setIncomeToasts([]);
+    setRoutePreview(null);
     setRequiresCountrySelection(true);
     setCountryPickerMode("initial");
     setCountryPickerOpen(false);
