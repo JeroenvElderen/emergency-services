@@ -1947,7 +1947,11 @@ export default function Page() {
     incidentMarkerRefs.current = [];
     realStationMarkerRefs.current = [];
 
-    game.stations.forEach((station) => {
+    game.stations
+      .filter((station) =>
+        isWithinCountryBounds(station.lat, station.lng, game.activeCountryCode),
+      )
+      .forEach((station) => {
       const el = document.createElement("div");
       el.className = "relative flex h-10 w-10 items-start justify-center";
       el.title = station.name;
@@ -1976,6 +1980,9 @@ export default function Page() {
 
     const depotCountries = new Set(
       game.stations
+        .filter((station) =>
+          isWithinCountryBounds(station.lat, station.lng, game.activeCountryCode),
+        )
         .map((station) => findCountryByLocation(station.lat, station.lng)?.code)
         .filter((code): code is string => Boolean(code)),
     );
@@ -1995,7 +2002,11 @@ export default function Page() {
       );
     });
 
-    activeIncidents.forEach((incident) => {
+    activeIncidents
+      .filter((incident) =>
+        isWithinCountryBounds(incident.lat, incident.lng, game.activeCountryCode),
+      )
+      .forEach((incident) => {
       const phase = getIncidentMarkerPhase(incident, game.vehicles);
       const markerStyle = INCIDENT_MARKER_PHASE_STYLES[phase];
       if (phase === "RETURNING" || phase === "FILING") {
@@ -2022,7 +2033,7 @@ export default function Page() {
           .setLngLat([incident.lng, incident.lat])
           .addTo(mapRef.current!),
       );
-    });
+      });
 
     deliveries.forEach((delivery) => {
       const [lng, lat] = getRoutePosition(
