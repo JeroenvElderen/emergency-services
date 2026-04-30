@@ -1367,9 +1367,10 @@ export default function Page() {
     const query = `[out:json][timeout:25];(${typeQuery});out center tags;`;
 
     try {
-      const response = await fetch("https://overpass-api.de/api/interpreter", {
+      const response = await fetch("/api/overpass", {
         method: "POST",
-        body: query,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query }),
       });
       if (!response.ok) return;
 
