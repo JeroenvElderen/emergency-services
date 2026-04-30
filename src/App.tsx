@@ -2114,6 +2114,12 @@ export default function Page() {
               ],
             ] as [number, number][]);
       const [lng, lat] = getRoutePosition(fullRoute, progress, fallback);
+      const inActiveCountry = isWithinCountryBounds(lat, lng, game.activeCountryCode);
+      if (!inActiveCountry) {
+        vehicleMarkerRefs.current.get(vehicle.id)?.remove();
+        vehicleMarkerRefs.current.delete(vehicle.id);
+        return;
+      }
 
       const existing = vehicleMarkerRefs.current.get(vehicle.id);
       if (existing) {
