@@ -2874,7 +2874,7 @@ export default function Page() {
               className="mt-2 w-full"
               onClick={() => {
                 setIsSelectingRealStation(true);
-                setBuildPickerOpen(false);
+                void loadRealStations();
               }}
             >
               Select real station on map
