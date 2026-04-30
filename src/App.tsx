@@ -653,7 +653,12 @@ function stationSupportsRequiredTypes(
 ) {
   const requiredCounts = requirementCounts(requiredTypes);
   const stationVehicleCounts = vehicles
-    .filter((vehicle) => vehicle.stationId === station.id)
+    .filter(
+      (vehicle) =>
+        vehicle.stationId === station.id &&
+        vehicle.status === "AVAILABLE" &&
+        vehicle.incidentId === null,
+    )
     .reduce(
       (counts, vehicle) => ({
         ...counts,
@@ -2656,6 +2661,41 @@ export default function Page() {
             .map((id) => nextVehicles.find((v) => v.id === id))
             .filter((v): v is Vehicle => Boolean(v));
 
+          if (nextIncident.status === "AWAITING_RETURN") {
+            const allBackAtStation = assignedVehicles.every(
+              (vehicle) =>
+                vehicle.status === "AVAILABLE" && vehicle.incidentId === null,
+            );
+            if (!allBackAtStation) return nextIncident;
+
+            const missionCrewCost = assignedVehicles.reduce(
+              (sum, vehicle) =>
+                sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
+              0,
+            );
+            const trainingBonus = current.stations.reduce(
+              (sum, station) => sum + station.upgrades.trainingWing,
+              0,
+            );
+            const qualityMultiplier = 0.92 + current.reputation / 500;
+            const trainingMultiplier =
+              1 + Math.min(trainingBonus, 30) * 0.004;
+            const payout = Math.round(
+              nextIncident.reward * qualityMultiplier * trainingMultiplier,
+            );
+
+            creditsEarned += payout - missionCrewCost;
+            progressNotes.push(
+              `${nextIncident.title} completed after all trucks returned (+${payout}, payroll -${missionCrewCost}).`,
+            );
+            return {
+              ...nextIncident,
+              status: "COMPLETE" as IncidentStatus,
+              filingRemaining: 0,
+              stageWorkRemaining: 0,
+            };
+          }
+
           const finalStageComplete =
             nextIncident.currentStage >= nextIncident.stages.length - 1 &&
             nextIncident.stageWorkRemaining <= 0;
@@ -2694,23 +2734,6 @@ export default function Page() {
           const nextStage = nextIncident.currentStage + 1;
           if (nextStage >= nextIncident.stages.length) {
             const assignedIds = new Set(nextIncident.assignedVehicleIds);
-            const missionCrewCost = assignedVehicles.reduce(
-              (sum, vehicle) =>
-                sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
-              0,
-            );
-            const trainingBonus = current.stations.reduce(
-              (sum, station) => sum + station.upgrades.trainingWing,
-              0,
-            );
-            const qualityMultiplier = 0.92 + current.reputation / 500;
-            const trainingMultiplier =
-              1 + Math.min(trainingBonus, 30) * 0.004;
-            const payout = Math.round(
-              nextIncident.reward * qualityMultiplier * trainingMultiplier,
-            );
-
-            creditsEarned += payout - missionCrewCost;
             nextVehicles = nextVehicles.map((vehicle) => {
               if (!assignedIds.has(vehicle.id)) return vehicle;
               const station = current.stations.find((s) => s.id === vehicle.stationId);
@@ -2753,11 +2776,11 @@ export default function Page() {
             });
 
             progressNotes.push(
-              `${nextIncident.title} completed (+${payout}, payroll -${missionCrewCost}).`,
+              `${nextIncident.title} resolved on scene, awaiting truck return to station.`,
             );
             return {
               ...nextIncident,
-              status: "COMPLETE" as IncidentStatus,
+              status: "AWAITING_RETURN" as IncidentStatus,
               filingRemaining: 0,
               stageWorkRemaining: 0,
             };
