@@ -8,4 +8,4 @@ export type VehicleType =
 
 export type IncidentCategory = "FIRE" | "EMS" | "POLICE";
 export type VehicleStatus = "AVAILABLE" | "DISPATCHED" | "RETURNING" | "MAINTENANCE";
-export type IncidentStatus = "OPEN" | "RESPONDING" | "COMPLETE";
+export type IncidentStatus = "OPEN" | "RESPONDING" | "AWAITING_RETURN" | "COMPLETE";
