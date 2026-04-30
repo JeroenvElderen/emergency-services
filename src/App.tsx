@@ -1004,17 +1004,25 @@ export default function Page() {
 
   useEffect(() => {
     if (deliveries.length === 0) return;
-    const now = Date.now();
-    setDeliveries((current) =>
-      current.filter((delivery) => {
-        const elapsed = (now - delivery.startedAt) / 1000;
-        return elapsed < delivery.durationSeconds;
-      }).map((delivery) => {
-        const elapsed = (now - delivery.startedAt) / 1000;
-        return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
-      }),
-    );
-  }, []);
+    const tickDeliveries = () => {
+      const now = Date.now();
+      setDeliveries((current) =>
+        current
+          .filter((delivery) => {
+            const elapsed = (now - delivery.startedAt) / 1000;
+            return elapsed < delivery.durationSeconds;
+          })
+          .map((delivery) => {
+            const elapsed = (now - delivery.startedAt) / 1000;
+            return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
+          }),
+      );
+    };
+
+    tickDeliveries();
+    const interval = window.setInterval(tickDeliveries, 1000);
+    return () => window.clearInterval(interval);
+  }, [deliveries.length]);
 
   useEffect(() => {
     let mounted = true;
