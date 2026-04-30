@@ -1902,8 +1902,7 @@ export default function Page() {
 
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
-        ((vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
-          vehicle.incidentId !== null);
+        vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING";
 
       if (!shouldRenderVehicle) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
@@ -2265,7 +2264,8 @@ export default function Page() {
     setGame((current) => ({ ...current, credits: current.credits - config.cost }));
 
     const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
-    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
+    // Keep depot transfers visible long enough that players can see vehicles travel.
+    const deliverySeconds = Math.max(45, Math.round(deliveryDistanceKm * 65));
 
     let purchasedVehicleId: number | null = null;
     setGame((current) => {
