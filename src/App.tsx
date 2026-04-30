@@ -865,9 +865,9 @@ const INCIDENT_MARKER_PHASE_STYLES: Record<
   { label: string; background: string }
 > = {
   UNTOUCHED: { label: "Nothing dispatched yet", background: "#dc2626" },
-  EN_ROUTE: { label: "Truck en route", background: "#f59e0b" },
+  EN_ROUTE: { label: "Truck en route", background: "#7c3aed" },
   ON_SCENE: { label: "Truck on scene", background: "#16a34a" },
-  RETURNING: { label: "Truck returning", background: "#2563eb" },
+  RETURNING: { label: "Truck returning", background: "#dc2626" },
 };
 
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
@@ -944,7 +944,7 @@ export default function Page() {
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
-  const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
+  const [mapVisualStyle] = useState<MapVisualStyle>("DARK_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -1027,7 +1027,7 @@ export default function Page() {
     window.addEventListener("keydown", handleReloadShortcut);
     return () => window.removeEventListener("keydown", handleReloadShortcut);
   }, []);
-  
+
   useEffect(() => {
     if (maintenanceJobs.length === 0) return;
     const tickMaintenance = () => {
@@ -1448,8 +1448,12 @@ export default function Page() {
             ].slice(0, 10),
           };
         }
+        const existingTypeCount = current.stations.filter(
+          (station) => station.type === type,
+        ).length;
+        const isFirstStationOfType = existingTypeCount === 0;
         const isFirstStation = current.stations.length === 0;
-        const buildCost = isFirstStation ? 0 : STATION_COST;
+        const buildCost = isFirstStationOfType ? 0 : STATION_COST;
         if (current.credits < buildCost) return current;
 
         const id = current.nextStationId;
@@ -1513,7 +1517,7 @@ export default function Page() {
           log: [
             isFirstStation
               ? `Built ${station.name}. Game started with 2 ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and 10 employees.`
-              : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.`,
+              : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.${isFirstStationOfType ? " (Free first station for this department.)" : ""}`,
             ...current.log,
           ].slice(0, 10),
         };
@@ -2133,11 +2137,9 @@ export default function Page() {
       const color =
         vehicle.status === "MAINTENANCE"
           ? "rgba(168,85,247,0.95)"
-          : vehicle.type === "ENGINE" || vehicle.type === "LADDER"
-          ? "rgba(249,115,22,0.95)"
-          : vehicle.type === "AMBULANCE" || vehicle.type === "RESCUE"
-            ? "rgba(34,197,94,0.95)"
-            : "rgba(14,165,233,0.95)";
+          : vehicle.status === "RETURNING"
+            ? "rgba(220,38,38,0.95)"
+            : "rgba(37,99,235,0.95)";
       const isResponding = vehicle.status === "DISPATCHED" && vehicle.eta > 0;
       const icon =
         vehicle.type === "ENGINE" || vehicle.type === "LADDER"
@@ -2353,7 +2355,7 @@ export default function Page() {
       if (
         !vehicle ||
         !incident ||
-        (vehicle.status !== "AVAILABLE" && vehicle.status !== "RETURNING") ||
+        vehicle.status !== "AVAILABLE" ||
         current.credits < DISPATCH_COST ||
         incident.assignedVehicleIds.includes(vehicleId)
       ) {
@@ -3207,9 +3209,9 @@ export default function Page() {
               Change / buy country license
             </Button>
             <p className="mt-1 text-[11px] text-slate-400">
-              {hasStarted
+              {game.stations.some((station) => station.type === selectedBuild)
                 ? `Cost: ${STATION_COST} credits`
-                : "First building is free"}
+                : `First ${STATION_TYPES[selectedBuild].label.toLowerCase()} station is free`}
             </p>
           </div>
         )}

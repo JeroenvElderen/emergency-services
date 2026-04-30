@@ -111,7 +111,7 @@ export function LiveIncidentsPanel({
   const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
 
   const availableVehicles = useMemo(
-    () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE" || vehicle.status === "RETURNING"),
+    () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE"),
     [vehicles],
   );
 
@@ -154,6 +154,10 @@ export function LiveIncidentsPanel({
     return "bg-sky-500/18";
   };
 
+  if (newIncidents.length === 0 && incomingDeliveries.length === 0) {
+    return null;
+  }
+  
   return (
     <>
       <Button
