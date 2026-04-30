@@ -185,21 +185,12 @@ type GameState = {
   weather: "CLEAR" | "RAIN" | "SNOW" | "HEAT";
   weatherTimer: number;
   missionDailySpawns: Record<string, string>;
+  nextMissionSpawnAt: number;
 };
 
 type IncomeToast = {
   id: number;
   amount: number;
-};
-
-type RoutePreviewState = {
-  incidentId: number;
-  routes: {
-    key: string;
-    color: string;
-    coordinates: [number, number][];
-  }[];
-  selectedRouteKey?: string;
 };
 
 type VehicleOrderModalState = {
@@ -231,12 +222,12 @@ const LAW_COMPLIANCE = {
 };
 const WEATHER_EFFECTS: Record<
   GameState["weather"],
-  { speedMultiplier: number; incidentMultiplier: number; label: string }
+  { speedMultiplier: number; label: string }
 > = {
-  CLEAR: { speedMultiplier: 1, incidentMultiplier: 1, label: "Clear" },
-  RAIN: { speedMultiplier: 0.84, incidentMultiplier: 1.18, label: "Rain" },
-  SNOW: { speedMultiplier: 0.72, incidentMultiplier: 1.24, label: "Snow" },
-  HEAT: { speedMultiplier: 0.9, incidentMultiplier: 1.12, label: "Heat" },
+  CLEAR: { speedMultiplier: 1, label: "Clear" },
+  RAIN: { speedMultiplier: 0.84, label: "Rain" },
+  SNOW: { speedMultiplier: 0.72, label: "Snow" },
+  HEAT: { speedMultiplier: 0.9, label: "Heat" },
 };
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
@@ -429,6 +420,7 @@ const initialState: GameState = {
   weather: "CLEAR",
   weatherTimer: WEATHER_INTERVAL_SECONDS,
   missionDailySpawns: {},
+  nextMissionSpawnAt: Date.now() + 5 * 60 * 1000,
 };
 
 const rand = (min: number, max: number) =>
@@ -584,6 +576,13 @@ function isSpecialMissionDefinition(mission: MissionDefinition) {
   return mission.special ?? Boolean(mission.fixed_location);
 }
 
+function missionSpawnIntervalSeconds(stationCount: number, resolvedCount: number) {
+  if (stationCount <= 2) return 5 * 60;
+  if (stationCount <= 5) return 4 * 60;
+  if (resolvedCount >= 80) return 2 * 60;
+  return 3 * 60;
+}
+
 function normalizeRequirementKey(value: string) {
   return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
@@ -697,6 +696,10 @@ function loadGame(): GameState {
       weather: parsed.weather ?? "CLEAR",
       weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
       missionDailySpawns: parsed.missionDailySpawns ?? {},
+      nextMissionSpawnAt:
+        typeof parsed.nextMissionSpawnAt === "number"
+          ? parsed.nextMissionSpawnAt
+          : Date.now() + 5 * 60 * 1000,
       homeCountryCode,
       activeCountryCode,
       unlockedCountryCodes: unlockedCountryCodes.includes(homeCountryCode)
@@ -941,7 +944,6 @@ export default function Page() {
     IncidentNotification[]
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
-  const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
   const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -1764,67 +1766,6 @@ export default function Page() {
   }, [game.incidents, game.stations, game.vehicles, game.weather, mapToken]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const sourceId = "dispatch-route-preview";
-    const selectedLayerId = "dispatch-route-preview-selected";
-    const altLayerId = "dispatch-route-preview-alt";
-
-    const clearLayers = () => {
-      if (map.getLayer(selectedLayerId)) map.removeLayer(selectedLayerId);
-      if (map.getLayer(altLayerId)) map.removeLayer(altLayerId);
-      if (map.getSource(sourceId)) map.removeSource(sourceId);
-    };
-
-    if (!routePreview || routePreview.routes.length === 0) {
-      clearLayers();
-      return;
-    }
-
-    const features = routePreview.routes.map((route) => ({
-      type: "Feature" as const,
-      properties: {
-        key: route.key,
-        color: route.color,
-        isSelected: route.key === routePreview.selectedRouteKey ? 1 : 0,
-      },
-      geometry: {
-        type: "LineString" as const,
-        coordinates: route.coordinates,
-      },
-    }));
-
-    clearLayers();
-    map.addSource(sourceId, {
-      type: "geojson",
-      data: { type: "FeatureCollection", features },
-    });
-
-    map.addLayer({
-      id: altLayerId,
-      type: "line",
-      source: sourceId,
-      filter: ["==", ["get", "isSelected"], 0],
-      paint: {
-        "line-color": ["get", "color"],
-        "line-width": 4,
-        "line-opacity": 0.55,
-      },
-    });
-    map.addLayer({
-      id: selectedLayerId,
-      type: "line",
-      source: sourceId,
-      filter: ["==", ["get", "isSelected"], 1],
-      paint: {
-        "line-color": ["get", "color"],
-        "line-width": 6,
-        "line-opacity": 0.95,
-      },
-    });
-  }, [routePreview]);
-
-  useEffect(() => {
     if (!mapRef.current) return;
 
     stationMarkerRefs.current.forEach((marker) => marker.remove());
@@ -2317,9 +2258,6 @@ export default function Page() {
         ? ([[depot.lng, depot.lat], ...roadRoute.coordinates.slice(1)] as [number, number][])
         : ([ [depot.lng, depot.lat], [station.lng, station.lat] ] as [number, number][]);
 
-    const deliveryId = Date.now() + Math.floor(Math.random() * 1000);
-    const startedAt = Date.now();
-
     const config = VEHICLE_TYPES[type];
     const stationVehicles = game.vehicles.filter((v) => v.stationId === station.id).length;
     if (station.type !== config.stationType || game.credits < config.cost || stationVehicles >= stationCapacity(station)) return;
@@ -2329,82 +2267,62 @@ export default function Page() {
     const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
     const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
 
-    setDeliveries((current) => [
-      ...current,
-      {
-        id: deliveryId,
-        vehicleType: type,
-        stationId,
-        progress: 0,
-        from: [depot.lng, depot.lat],
-        to: [station.lng, station.lat],
-        route: deliveryRoute,
-        startedAt,
-        durationSeconds: deliverySeconds,
-      },
-    ]);
-
-    const interval = window.setInterval(() => {
-      setDeliveries((current) =>
-        current.map((delivery) => {
-          if (delivery.id !== deliveryId) return delivery;
-          const elapsed = (Date.now() - delivery.startedAt) / 1000;
-          return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
-        }),
-      );
-      }, 1000);
-
-      window.setTimeout(() => {
-      window.clearInterval(interval);
-      setDeliveries((current) => current.filter((delivery) => delivery.id !== deliveryId));
-
-      setGame((current) => {
-        const station = current.stations.find((item) => item.id === stationId);
-
-        if (!station) {
-          return {
-            ...current,
-            credits: current.credits + config.cost,
-            log: [
-              `Delivery for ${config.label} failed because station no longer exists. Refunded ${config.cost} credits.`,
-              ...current.log,
-            ].slice(0, 10),
-          };
-        }
-
-        const currentStationVehicles = current.vehicles.filter((v) => v.stationId === station.id).length;
-        if (station.type !== config.stationType || currentStationVehicles >= stationCapacity(station)) {
-          return {
-            ...current,
-            credits: current.credits + config.cost,
-            log: [
-              `Delivery for ${config.label} to ${station.name} failed (station incompatible or full). Refunded ${config.cost} credits.`,
-              ...current.log,
-            ].slice(0, 10),
-          };
-        }
-
-        const id = current.nextVehicleId;
-        const vehicle: Vehicle = {
-          id,
-          name: `${config.label} ${id}`,
-          type,
-          stationId: station.id,
-          status: "AVAILABLE",
-          eta: 0,
-          totalEta: 0,
-          incidentId: null,
-          route: [],
-          speedFactor: createVehicleSpeedFactor(),
-        };
-
+    let purchasedVehicleId: number | null = null;
+    setGame((current) => {
+      const liveStation = current.stations.find((item) => item.id === stationId);
+      if (!liveStation) {
         return {
           ...current,
-          nextVehicleId: id + 1,
-          employees: current.employees + config.crew,
-          vehicles: [...current.vehicles, vehicle],
+          credits: current.credits + config.cost,
           log: [
-            `Delivered ${vehicle.name} from ${findCountry(stationCountry.code).name} depot to ${station.name}. Auto-hired ${config.crew} employee${config.crew > 1 ? "s" : ""}.`,
+            `Purchase for ${config.label} failed because station no longer exists. Refunded ${config.cost} credits.`,
+            ...current.log,
+          ].slice(0, 10),
+        };
+      }
+
+      const id = current.nextVehicleId;
+      purchasedVehicleId = id;
+      const vehicle: Vehicle = {
+        id,
+        name: `${config.label} ${id}`,
+        type,
+        stationId: liveStation.id,
+        status: "RETURNING",
+        eta: deliverySeconds,
+        totalEta: deliverySeconds,
+        incidentId: null,
+        route: deliveryRoute,
+        speedFactor: createVehicleSpeedFactor(),
+      };
+
+      return {
+        ...current,
+        nextVehicleId: id + 1,
+        employees: current.employees + config.crew,
+        vehicles: [...current.vehicles, vehicle],
+        log: [
+          `Purchased ${vehicle.name}; en route from ${findCountry(stationCountry.code).name} depot to ${liveStation.name}. Crew reserved: ${config.crew}.`,
+          ...current.log,
+        ].slice(0, 10),
+      };
+    });
+
+    if (purchasedVehicleId === null) return;
+
+    window.setTimeout(() => {
+      setGame((current) => {
+        const station = current.stations.find((item) => item.id === stationId);
+        if (!station) return current;
+        return {
+          ...current,
+          vehicles: current.vehicles.map((vehicle) =>
+            vehicle.id === purchasedVehicleId && vehicle.status === "RETURNING"
+              ? { ...vehicle, status: "AVAILABLE", eta: 0, totalEta: 0, route: [] }
+              : vehicle,
+          ),
+          log: [
+            `${config.label} ${purchasedVehicleId} arrived at ${station.name} and is now available.`,
             ...current.log,
           ].slice(0, 10),
         };
@@ -2501,7 +2419,6 @@ export default function Page() {
     setFocusedIncidentId(null);
     setIncidentNotifications([]);
     setIncomeToasts([]);
-    setRoutePreview(null);
     setRequiresCountrySelection(true);
     setCountryPickerMode("initial");
     setCountryPickerOpen(false);
@@ -2730,24 +2647,22 @@ export default function Page() {
           1,
           current.stations.length * 2 + progressionBuffer,
         );
-        const weatherIncidentMultiplier =
-          WEATHER_EFFECTS[current.weather].incidentMultiplier;
-        const stationSpawnMultiplier = 1 + Math.min(current.stations.length, 20) / 40;
-
+        const intervalSeconds = missionSpawnIntervalSeconds(
+          current.stations.length,
+          current.resolvedCount,
+        );
+        const intervalMs = intervalSeconds * 1000;
         const shouldSpawn =
           current.stations.length > 0 &&
           activeCount < maxActiveIncidents &&
-          Math.random() <
-            (activeCount < 1 ? 0.2 : 0.08) *
-              weatherIncidentMultiplier *
-              stationSpawnMultiplier *
-              (1 + (50 - current.reputation) / 220);
+          now >= current.nextMissionSpawnAt;
 
         let finalIncidents = nextIncidents;
         let nextIncidentId = current.nextIncidentId;
         let nextResolvedCount = current.resolvedCount;
         const nextCredits = current.credits + creditsEarned;
         const nextMissionDailySpawns = { ...current.missionDailySpawns };
+        let nextMissionSpawnAt = current.nextMissionSpawnAt;
 
         if (creditsEarned > 0) {
           nextResolvedCount +=
@@ -2847,6 +2762,7 @@ export default function Page() {
               required: incident.stages[0]?.required ?? [],
             });
           }
+          nextMissionSpawnAt = now + intervalMs;
         }
 
         const nextWeatherTimer = current.weatherTimer - elapsedTicks;
@@ -2874,6 +2790,7 @@ export default function Page() {
           weather: nextWeather,
           weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
           missionDailySpawns: nextMissionDailySpawns,
+          nextMissionSpawnAt,
           nextIncidentId,
           vehicles: nextVehicles,
           incidents: finalIncidents,
@@ -3417,7 +3334,6 @@ export default function Page() {
         dispatchCost={DISPATCH_COST}
         onDispatchVehicle={dispatch}
         onLoadRouteOptions={loadRouteOptions}
-        onRoutePreviewChange={setRoutePreview}
         incomingDeliveries={deliveries.map((delivery) => ({
           id: delivery.id,
           vehicleType: delivery.vehicleType,

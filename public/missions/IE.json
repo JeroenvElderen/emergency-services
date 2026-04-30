@@ -354,7 +354,7 @@
     "name": "Active Vehicle Pursuit (Police Chasing Suspect)",
     "average_credits": 170,
     "requirements": {
-      "patrol_cars": 2
+      "patrol_cars": 1
     },
     "prerequisites": {
       "police_stations": 1
