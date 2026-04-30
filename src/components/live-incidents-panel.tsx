@@ -120,7 +120,7 @@ export function LiveIncidentsPanel({
       activeIncidents
         .filter((incident) => incident.assignedVehicleIds.length === 0)
         .map((incident) => ({ incident, progress: missionProgress(incident) }))
-        .sort((a, b) => b.incident.id - a.incident.id),
+        .sort((a, b) => a.incident.id - b.incident.id),
     [activeIncidents, missionProgress],
   );
 
