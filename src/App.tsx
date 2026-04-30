@@ -2715,9 +2715,24 @@ export default function Page() {
           },
           {} as Partial<Record<IncidentCategory, number>>,
         );
-        const maxActiveIncidents = Math.max(1, current.vehicles.length);
+        const serviceStationCounts = current.stations.reduce(
+          (counts, station) => {
+            const serviceType = station.type as IncidentCategory;
+            return {
+              ...counts,
+              [serviceType]: (counts[serviceType] ?? 0) + 1,
+            };
+          },
+          {} as Partial<Record<IncidentCategory, number>>,
+        );
+        const progressionBuffer = Math.min(6, Math.floor(current.resolvedCount / 25));
+        const maxActiveIncidents = Math.max(
+          1,
+          current.stations.length * 2 + progressionBuffer,
+        );
         const weatherIncidentMultiplier =
           WEATHER_EFFECTS[current.weather].incidentMultiplier;
+        const stationSpawnMultiplier = 1 + Math.min(current.stations.length, 20) / 40;
 
         const shouldSpawn =
           current.stations.length > 0 &&
@@ -2725,6 +2740,7 @@ export default function Page() {
           Math.random() <
             (activeCount < 1 ? 0.2 : 0.08) *
               weatherIncidentMultiplier *
+              stationSpawnMultiplier *
               (1 + (50 - current.reputation) / 220);
 
         let finalIncidents = nextIncidents;
@@ -2748,8 +2764,10 @@ export default function Page() {
           });
           const categoryLimitedTemplates = available.filter((template) => {
             const activeForCategory = activeCategoryCounts[template.category] ?? 0;
+            const stationsForCategory = serviceStationCounts[template.category] ?? 0;
             const vehiclesForCategory = serviceVehicleCounts[template.category] ?? 0;
-            return activeForCategory < vehiclesForCategory;
+            const categoryCap = Math.max(stationsForCategory * 2, Math.ceil(vehiclesForCategory / 2));
+            return categoryCap > 0 && activeForCategory < categoryCap;
           });
           if (categoryLimitedTemplates.length > 0) {
             const activeMissionIds = new Set(
