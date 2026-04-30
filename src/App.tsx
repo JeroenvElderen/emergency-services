@@ -846,6 +846,8 @@ export default function Page() {
   const [buildPickerOpen, setBuildPickerOpen] = useState(false);
   const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
   const [realStations, setRealStations] = useState<RealStationSite[]>([]);
+  const [isLoadingRealStations, setIsLoadingRealStations] = useState(false);
+  const [realStationsError, setRealStationsError] = useState<string | null>(null);
   const [selectedStationId, setSelectedStationId] = useState<number | null>(
     null,
   );
@@ -1335,9 +1337,14 @@ export default function Page() {
   const loadRealStations = useCallback(async () => {
     const map = mapRef.current;
     if (!map) return;
+    setIsLoadingRealStations(true);
+    setRealStationsError(null);
 
     const bounds = map.getBounds();
-    if (!bounds) return;
+    if (!bounds) {
+      setIsLoadingRealStations(false);
+      return;
+    }
     const zoom = map.getZoom();
     const center = map.getCenter();
     const south = bounds.getSouth().toFixed(4);
@@ -1361,20 +1368,27 @@ export default function Page() {
       POLICE: ['nwr["amenity"="police"]'],
     };
 
-    const typeQuery = queryByType[selectedBuild]
-      .map((selector) => `${selector}(${aroundClause});`)
-      .join("");
-    const query = `[out:json][timeout:25];(${typeQuery});out center tags;`;
+    const makeQuery = (clause: string) => {
+      const typeQuery = queryByType[selectedBuild]
+        .map((selector) => `${selector}(${clause});`)
+        .join("");
+      return `[out:json][timeout:25];(${typeQuery});out center tags;`;
+    };
 
     try {
+      const queryPrimary = makeQuery(aroundClause);
       const response = await fetch("/api/overpass", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: queryPrimary }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        setRealStations([]);
+        setRealStationsError("Couldn't load stations from map data provider.");
+        return;
+      }
 
-      const data = (await response.json()) as {
+      const parseSites = (data: {
         elements?: {
           id: number;
           lat?: number;
@@ -1382,8 +1396,7 @@ export default function Page() {
           center?: { lat: number; lon: number };
           tags?: { name?: string };
         }[];
-      };
-      const sites =
+      }) =>
         data.elements
           ?.map((item) => {
             const lat = item.lat ?? item.center?.lat;
@@ -1401,9 +1414,45 @@ export default function Page() {
           })
           .filter((item): item is RealStationSite => Boolean(item))
           .slice(0, 25) ?? [];
+      const dataPrimary = (await response.json()) as {
+        elements?: {
+          id: number;
+          lat?: number;
+          lon?: number;
+          center?: { lat: number; lon: number };
+          tags?: { name?: string };
+        }[];
+      };
+      let sites = parseSites(dataPrimary);
+      if (sites.length === 0) {
+        const fallbackClause = `around:45000,${center.lat.toFixed(4)},${center.lng.toFixed(4)}`;
+        const fallbackResponse = await fetch("/api/overpass", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ query: makeQuery(fallbackClause) }),
+        });
+        if (fallbackResponse.ok) {
+          const dataFallback = (await fallbackResponse.json()) as {
+            elements?: {
+              id: number;
+              lat?: number;
+              lon?: number;
+              center?: { lat: number; lon: number };
+              tags?: { name?: string };
+            }[];
+          };
+          sites = parseSites(dataFallback);
+        }
+      }
       setRealStations(sites);
+      if (sites.length === 0) {
+        setRealStationsError("No stations found in this area. Pan/zoom and try again.");
+      }
     } catch {
       setRealStations([]);
+      setRealStationsError("Couldn't load stations from map data provider.");
+    } finally {
+      setIsLoadingRealStations(false);
     }
   }, [selectedBuild]);
 
@@ -2830,6 +2879,26 @@ export default function Page() {
             >
               Select real station on map
             </Button>
+            {isSelectingRealStation && (
+              <div className="mt-2 rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1.5 text-[11px] text-violet-100">
+                {isLoadingRealStations
+                  ? "Loading real station points…"
+                  : realStationsError ??
+                    `Tap a + marker on the map to build (${realStations.length} available).`}
+              </div>
+            )}
+            {isSelectingRealStation && !isLoadingRealStations && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="mt-2 w-full"
+                onClick={() => {
+                  void loadRealStations();
+                }}
+              >
+                Refresh map stations
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
