@@ -2120,7 +2120,6 @@ export default function Page() {
             ? "rgba(34,197,94,0.95)"
             : "rgba(14,165,233,0.95)";
       const isResponding = vehicle.status === "DISPATCHED" && vehicle.eta > 0;
-      const isReturning = vehicle.status === "RETURNING" && vehicle.eta > 0;
       const icon =
         vehicle.type === "ENGINE" || vehicle.type === "LADDER"
           ? "🚒"
@@ -2131,7 +2130,7 @@ export default function Page() {
               : "🚓";
       el.className = "relative flex h-8 w-8 items-start justify-center";
       el.innerHTML = `
-        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : isReturning ? "vehicle-return-blink 0.9s steps(1,end) infinite" : "none"};">
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : "none"};">
           ${icon}
         </div>
         <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
@@ -2679,84 +2678,66 @@ export default function Page() {
           const nextStage = nextIncident.currentStage + 1;
           if (nextStage >= nextIncident.stages.length) {
             const assignedIds = new Set(nextIncident.assignedVehicleIds);
-            const anyDispatched = nextVehicles.some(
-              (vehicle) =>
-                assignedIds.has(vehicle.id) &&
-                vehicle.status === "DISPATCHED" &&
-                vehicle.eta <= 0,
+            const missionCrewCost = assignedVehicles.reduce(
+              (sum, vehicle) =>
+                sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
+              0,
             );
-            if (anyDispatched) {
-              nextVehicles = nextVehicles.map((vehicle) => {
-                if (
-                  !assignedIds.has(vehicle.id) ||
-                  vehicle.status !== "DISPATCHED"
-                )
-                  return vehicle;
-                const station = current.stations.find(
-                  (s) => s.id === vehicle.stationId,
-                );
-                if (!station) return vehicle;
-                const returnKm = haversineKm(station, nextIncident);
-                const dispatchUpgrade =
-                  1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
-                const returnEta = Math.max(
-                  8,
-                  Math.round(
-                    (returnKm /
-                      resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
-                      3600,
-                  ),
-                );
+            const trainingBonus = current.stations.reduce(
+              (sum, station) => sum + station.upgrades.trainingWing,
+              0,
+            );
+            const qualityMultiplier = 0.92 + current.reputation / 500;
+            const trainingMultiplier =
+              1 + Math.min(trainingBonus, 30) * 0.004;
+            const payout = Math.round(
+              nextIncident.reward * qualityMultiplier * trainingMultiplier,
+            );
 
+            creditsEarned += payout - missionCrewCost;
+            nextVehicles = nextVehicles.map((vehicle) => {
+              if (!assignedIds.has(vehicle.id)) return vehicle;
+              const station = current.stations.find((s) => s.id === vehicle.stationId);
+              if (!station) {
                 return {
                   ...vehicle,
-                  status: "RETURNING" as VehicleStatus,
-                  incidentId: nextIncident.id,
-                  eta: returnEta,
-                  totalEta: returnEta,
-                  route: [
-                    [nextIncident.lng, nextIncident.lat],
-                    [station.lng, station.lat],
-                  ],
+                  status: "AVAILABLE" as VehicleStatus,
+                  incidentId: null,
+                  eta: 0,
+                  totalEta: 0,
+                  route: [],
                 };
-              });
-            }
-
-            const allBackAtStation = nextVehicles.every(
-              (vehicle) =>
-                !assignedIds.has(vehicle.id) ||
-                (vehicle.status === "AVAILABLE" && vehicle.incidentId === null),
-            );
-            if (allBackAtStation) {
-              const missionCrewCost = assignedVehicles.reduce(
-                (sum, vehicle) =>
-                  sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
-                0,
-              );
-              const trainingBonus = current.stations.reduce(
-                (sum, station) => sum + station.upgrades.trainingWing,
-                0,
-              );
-              const qualityMultiplier = 0.92 + current.reputation / 500;
-              const trainingMultiplier =
-                1 + Math.min(trainingBonus, 30) * 0.004;
-              const payout = Math.round(
-                nextIncident.reward * qualityMultiplier * trainingMultiplier,
-              );
-              creditsEarned += payout - missionCrewCost;
-              progressNotes.push(
-                `${nextIncident.title} completed (+${payout}, payroll -${missionCrewCost}).`,
+              }
+              const returnKm = haversineKm(station, nextIncident);
+              const dispatchUpgrade =
+                1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
+              const returnEta = Math.max(
+                8,
+                Math.round(
+                  (returnKm /
+                    resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
+                    3600,
+                ),
               );
               return {
-                ...nextIncident,
-                status: "COMPLETE" as IncidentStatus,
-                filingRemaining: 0,
-                stageWorkRemaining: 0,
+                ...vehicle,
+                status: "RETURNING" as VehicleStatus,
+                incidentId: nextIncident.id,
+                eta: returnEta,
+                totalEta: returnEta,
+                route: [
+                  [nextIncident.lng, nextIncident.lat],
+                  [station.lng, station.lat],
+                ],
               };
-            }
+            });
 
+            progressNotes.push(
+              `${nextIncident.title} completed (+${payout}, payroll -${missionCrewCost}).`,
+            );
             return {
               ...nextIncident,
+              status: "COMPLETE" as IncidentStatus,
               filingRemaining: 0,
               stageWorkRemaining: 0,
             };
