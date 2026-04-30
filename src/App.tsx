@@ -65,6 +65,8 @@ type VehicleDelivery = {
   from: [number, number];
   to: [number, number];
   route: [number, number][];
+  startedAt: number;
+  durationSeconds: number;
 };
 
 type Vehicle = {
@@ -713,6 +715,30 @@ function saveGame(state: GameState) {
   localStorage.setItem("emergency-services-save-v2", JSON.stringify(state));
 }
 
+function loadDeliveries(): VehicleDelivery[] {
+  try {
+    const saved = localStorage.getItem("emergency-services-deliveries-v1");
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as VehicleDelivery[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry) =>
+      entry &&
+      typeof entry.id === "number" &&
+      typeof entry.stationId === "number" &&
+      typeof entry.vehicleType === "string" &&
+      Array.isArray(entry.route) &&
+      typeof entry.startedAt === "number" &&
+      typeof entry.durationSeconds === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveDeliveries(deliveries: VehicleDelivery[]) {
+  localStorage.setItem("emergency-services-deliveries-v1", JSON.stringify(deliveries));
+}
+
 async function fetchRoadRoute(
   start: { lat: number; lng: number },
   end: { lat: number; lng: number },
@@ -890,7 +916,7 @@ export default function Page() {
   const [selectedStationId, setSelectedStationId] = useState<number | null>(
     null,
   );
-  const [deliveries, setDeliveries] = useState<VehicleDelivery[]>([]);
+  const [deliveries, setDeliveries] = useState<VehicleDelivery[]>(() => loadDeliveries());
   const deliveryMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
   const [incidentNotifications, setIncidentNotifications] = useState<
@@ -957,9 +983,30 @@ export default function Page() {
   }, [game]);
 
   useEffect(() => {
-    const autosave = setInterval(() => saveGame(game), 10000);
+    saveDeliveries(deliveries);
+  }, [deliveries]);
+
+  useEffect(() => {
+    const autosave = setInterval(() => {
+      saveGame(game);
+      saveDeliveries(deliveries);
+    }, 10000);
     return () => clearInterval(autosave);
-  }, [game]);
+  }, [deliveries, game]);
+
+  useEffect(() => {
+    if (deliveries.length === 0) return;
+    const now = Date.now();
+    setDeliveries((current) =>
+      current.filter((delivery) => {
+        const elapsed = (now - delivery.startedAt) / 1000;
+        return elapsed < delivery.durationSeconds;
+      }).map((delivery) => {
+        const elapsed = (now - delivery.startedAt) / 1000;
+        return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
+      }),
+    );
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1916,6 +1963,7 @@ export default function Page() {
           : vehicle.type === "AMBULANCE" || vehicle.type === "RESCUE"
             ? "rgba(34,197,94,0.95)"
             : "rgba(14,165,233,0.95)";
+      const isResponding = vehicle.status === "DISPATCHED" && vehicle.eta > 0;
       const icon =
         vehicle.type === "ENGINE" || vehicle.type === "LADDER"
           ? "🚒"
@@ -1926,7 +1974,7 @@ export default function Page() {
               : "🚓";
       el.className = "relative flex h-8 w-8 items-start justify-center";
       el.innerHTML = `
-        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : "none"};">
           ${icon}
         </div>
         <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
@@ -2205,6 +2253,17 @@ export default function Page() {
         : ([ [depot.lng, depot.lat], [station.lng, station.lat] ] as [number, number][]);
 
     const deliveryId = Date.now() + Math.floor(Math.random() * 1000);
+    const startedAt = Date.now();
+
+    const config = VEHICLE_TYPES[type];
+    const stationVehicles = game.vehicles.filter((v) => v.stationId === station.id).length;
+    if (station.type !== config.stationType || game.credits < config.cost || stationVehicles >= stationCapacity(station)) return;
+
+    setGame((current) => ({ ...current, credits: current.credits - config.cost }));
+
+    const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
+    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
+
     setDeliveries((current) => [
       ...current,
       {
@@ -2215,19 +2274,18 @@ export default function Page() {
         from: [depot.lng, depot.lat],
         to: [station.lng, station.lat],
         route: deliveryRoute,
+        startedAt,
+        durationSeconds: deliverySeconds,
       },
     ]);
 
-    const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
-    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
-
     const interval = window.setInterval(() => {
       setDeliveries((current) =>
-        current.map((delivery) =>
-          delivery.id === deliveryId
-            ? { ...delivery, progress: Math.min(1, delivery.progress + 1 / deliverySeconds) }
-            : delivery,
-        ),
+        current.map((delivery) => {
+          if (delivery.id !== deliveryId) return delivery;
+          const elapsed = (Date.now() - delivery.startedAt) / 1000;
+          return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
+        }),
       );
       }, 1000);
 
@@ -2236,23 +2294,11 @@ export default function Page() {
       setDeliveries((current) => current.filter((delivery) => delivery.id !== deliveryId));
 
       setGame((current) => {
-        const config = VEHICLE_TYPES[type];
         const station = current.stations.find((item) => item.id === stationId);
 
-        if (
-          !station ||
-          station.type !== config.stationType ||
-          current.credits < config.cost
-        ) {
+        if (!station) {
           return current;
         }
-        const staffed = current.vehicles.reduce(
-          (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
-          0,
-        );
-        if (current.employees - staffed < config.crew) return current;
-        const used = current.vehicles.filter((v) => v.stationId === station.id).length;
-        if (used >= stationCapacity(station)) return current;
 
         const id = current.nextVehicleId;
         const vehicle: Vehicle = {
@@ -2270,7 +2316,6 @@ export default function Page() {
 
         return {
           ...current,
-          credits: current.credits - config.cost,
           nextVehicleId: id + 1,
           vehicles: [...current.vehicles, vehicle],
           log: [
@@ -2725,7 +2770,9 @@ export default function Page() {
   const weatherState = WEATHER_EFFECTS[game.weather];
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[#0b1727] text-slate-100">
+    <>
+      <style>{`@keyframes vehicle-emergency-blink { 0%, 49% { background: rgba(239,68,68,0.95); } 50%, 100% { background: rgba(59,130,246,0.95); } }`}</style>
+    <main className="relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#0b1727] text-slate-100">
       {mapToken ? (
         <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
       ) : (
@@ -3151,5 +3198,6 @@ export default function Page() {
         }))}
       />
     </main>
+    </>
   );
 }
