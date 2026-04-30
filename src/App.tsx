@@ -65,6 +65,8 @@ type VehicleDelivery = {
   from: [number, number];
   to: [number, number];
   route: [number, number][];
+  startedAt: number;
+  durationSeconds: number;
 };
 
 type Vehicle = {
@@ -713,6 +715,30 @@ function saveGame(state: GameState) {
   localStorage.setItem("emergency-services-save-v2", JSON.stringify(state));
 }
 
+function loadDeliveries(): VehicleDelivery[] {
+  try {
+    const saved = localStorage.getItem("emergency-services-deliveries-v1");
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as VehicleDelivery[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry) =>
+      entry &&
+      typeof entry.id === "number" &&
+      typeof entry.stationId === "number" &&
+      typeof entry.vehicleType === "string" &&
+      Array.isArray(entry.route) &&
+      typeof entry.startedAt === "number" &&
+      typeof entry.durationSeconds === "number",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveDeliveries(deliveries: VehicleDelivery[]) {
+  localStorage.setItem("emergency-services-deliveries-v1", JSON.stringify(deliveries));
+}
+
 async function fetchRoadRoute(
   start: { lat: number; lng: number },
   end: { lat: number; lng: number },
@@ -890,7 +916,9 @@ export default function Page() {
   const [selectedStationId, setSelectedStationId] = useState<number | null>(
     null,
   );
-  const [deliveries, setDeliveries] = useState<VehicleDelivery[]>([]);
+  const [vehicleOrderPickerOpen, setVehicleOrderPickerOpen] = useState(false);
+  const [vehicleOrderCounts, setVehicleOrderCounts] = useState<Partial<Record<VehicleType, number>>>({});
+  const [deliveries, setDeliveries] = useState<VehicleDelivery[]>(() => loadDeliveries());
   const deliveryMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
   const [incidentNotifications, setIncidentNotifications] = useState<
@@ -957,9 +985,30 @@ export default function Page() {
   }, [game]);
 
   useEffect(() => {
-    const autosave = setInterval(() => saveGame(game), 10000);
+    saveDeliveries(deliveries);
+  }, [deliveries]);
+
+  useEffect(() => {
+    const autosave = setInterval(() => {
+      saveGame(game);
+      saveDeliveries(deliveries);
+    }, 10000);
     return () => clearInterval(autosave);
-  }, [game]);
+  }, [deliveries, game]);
+
+  useEffect(() => {
+    if (deliveries.length === 0) return;
+    const now = Date.now();
+    setDeliveries((current) =>
+      current.filter((delivery) => {
+        const elapsed = (now - delivery.startedAt) / 1000;
+        return elapsed < delivery.durationSeconds;
+      }).map((delivery) => {
+        const elapsed = (now - delivery.startedAt) / 1000;
+        return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
+      }),
+    );
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -1916,6 +1965,7 @@ export default function Page() {
           : vehicle.type === "AMBULANCE" || vehicle.type === "RESCUE"
             ? "rgba(34,197,94,0.95)"
             : "rgba(14,165,233,0.95)";
+      const isResponding = vehicle.status === "DISPATCHED" && vehicle.eta > 0;
       const icon =
         vehicle.type === "ENGINE" || vehicle.type === "LADDER"
           ? "🚒"
@@ -1926,7 +1976,7 @@ export default function Page() {
               : "🚓";
       el.className = "relative flex h-8 w-8 items-start justify-center";
       el.innerHTML = `
-        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : "none"};">
           ${icon}
         </div>
         <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
@@ -2205,6 +2255,17 @@ export default function Page() {
         : ([ [depot.lng, depot.lat], [station.lng, station.lat] ] as [number, number][]);
 
     const deliveryId = Date.now() + Math.floor(Math.random() * 1000);
+    const startedAt = Date.now();
+
+    const config = VEHICLE_TYPES[type];
+    const stationVehicles = game.vehicles.filter((v) => v.stationId === station.id).length;
+    if (station.type !== config.stationType || game.credits < config.cost || stationVehicles >= stationCapacity(station)) return;
+
+    setGame((current) => ({ ...current, credits: current.credits - config.cost }));
+
+    const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
+    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
+
     setDeliveries((current) => [
       ...current,
       {
@@ -2215,19 +2276,18 @@ export default function Page() {
         from: [depot.lng, depot.lat],
         to: [station.lng, station.lat],
         route: deliveryRoute,
+        startedAt,
+        durationSeconds: deliverySeconds,
       },
     ]);
 
-    const deliveryDistanceKm = roadRoute?.distanceKm ?? haversineKm(depotPoint, stationPoint);
-    const deliverySeconds = Math.max(6, Math.round(deliveryDistanceKm * 40));
-
     const interval = window.setInterval(() => {
       setDeliveries((current) =>
-        current.map((delivery) =>
-          delivery.id === deliveryId
-            ? { ...delivery, progress: Math.min(1, delivery.progress + 1 / deliverySeconds) }
-            : delivery,
-        ),
+        current.map((delivery) => {
+          if (delivery.id !== deliveryId) return delivery;
+          const elapsed = (Date.now() - delivery.startedAt) / 1000;
+          return { ...delivery, progress: Math.min(1, elapsed / delivery.durationSeconds) };
+        }),
       );
       }, 1000);
 
@@ -2236,25 +2296,20 @@ export default function Page() {
       setDeliveries((current) => current.filter((delivery) => delivery.id !== deliveryId));
 
       setGame((current) => {
-        const config = VEHICLE_TYPES[type];
         const station = current.stations.find((item) => item.id === stationId);
 
-        if (
-          !station ||
-          station.type !== config.stationType ||
-          current.credits < config.cost
-        ) {
+        if (!station) {
           return current;
         }
-        const staffed = current.vehicles.reduce(
-          (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
-          0,
-        );
-        if (current.employees - staffed < config.crew) return current;
-        const used = current.vehicles.filter((v) => v.stationId === station.id).length;
-        if (used >= stationCapacity(station)) return current;
 
         const id = current.nextVehicleId;
+        const staffed = current.vehicles.reduce(
+          (sum, item) => sum + VEHICLE_TYPES[item.type].crew,
+          0,
+        );
+        const crewNeeded = VEHICLE_TYPES[type].crew;
+        const unassigned = Math.max(current.employees - staffed, 0);
+        const autoHire = Math.max(crewNeeded - unassigned, 0);
         const vehicle: Vehicle = {
           id,
           name: `${config.label} ${id}`,
@@ -2270,16 +2325,30 @@ export default function Page() {
 
         return {
           ...current,
-          credits: current.credits - config.cost,
+          employees: current.employees + autoHire,
           nextVehicleId: id + 1,
           vehicles: [...current.vehicles, vehicle],
           log: [
+            ...(autoHire > 0
+              ? [`Auto-hired ${autoHire} employees for ${vehicle.name} on arrival.`]
+              : []),
             `Delivered ${vehicle.name} from ${findCountry(stationCountry.code).name} depot to ${station.name}.`,
             ...current.log,
           ].slice(0, 10),
         };
       });
     }, deliverySeconds * 1000);
+  }
+
+  async function placeVehicleOrders(stationId: number) {
+    const entries = Object.entries(vehicleOrderCounts) as Array<[VehicleType, number]>;
+    for (const [type, qty] of entries) {
+      for (let idx = 0; idx < (qty ?? 0); idx += 1) {
+        await buyVehicle(stationId, type);
+      }
+    }
+    setVehicleOrderCounts({});
+    setVehicleOrderPickerOpen(false);
   }
 
   function upgradeStationBranch(
@@ -2725,7 +2794,9 @@ export default function Page() {
   const weatherState = WEATHER_EFFECTS[game.weather];
 
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-[#0b1727] text-slate-100">
+    <>
+      <style>{`@keyframes vehicle-emergency-blink { 0%, 49% { background: rgba(239,68,68,0.95); } 50%, 100% { background: rgba(59,130,246,0.95); } }`}</style>
+    <main className="relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#0b1727] text-slate-100">
       {mapToken ? (
         <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
       ) : (
@@ -3026,43 +3097,70 @@ export default function Page() {
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
                 Buy vehicles
               </p>
-              <div className="grid grid-cols-2 gap-1.5">
-                {(Object.keys(VEHICLE_TYPES) as VehicleType[])
-                  .filter(
-                    (type) =>
-                      VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                      !disabledVehicleTypes.includes(type),
-                  )
-                  .map((type) => {
-                    const config = VEHICLE_TYPES[type];
-                    const usedCapacity = game.vehicles.filter(
-                      (vehicle) => vehicle.stationId === selectedStation.id,
-                    ).length;
-                    const hasCapacity = usedCapacity < stationCapacity(selectedStation);
-                    const hasStaff = unassignedEmployees >= config.crew;
-                    const Icon =
-                      type === "ENGINE" || type === "LADDER"
-                        ? Truck
-                        : type === "PATROL" || type === "SWAT"
-                          ? CarFront
-                          : type === "AMBULANCE"
-                            ? Ambulance
-                            : Siren;
-                    return (
-                      <Button
-                        key={`${selectedStation.id}-${type}`}
-                        size="sm"
-                        variant="outline"
-                        disabled={game.credits < config.cost || !hasCapacity || !hasStaff}
-                        onClick={() => buyVehicle(selectedStation.id, type)}
-                      >
-                        <Icon className="mr-1 h-3.5 w-3.5" />
-                        {config.label}
-                      </Button>
-                    );
-                  })}
-              </div>
+              <Button size="sm" className="w-full" onClick={() => setVehicleOrderPickerOpen(true)}>
+                Open vehicle order popup
+              </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {selectedStation && vehicleOrderPickerOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-3">
+          <div className="w-full max-w-xl rounded-2xl border border-slate-700 bg-slate-900 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h4 className="text-base font-semibold">Order vehicles • {selectedStation.name}</h4>
+              <Button size="sm" variant="outline" onClick={() => setVehicleOrderPickerOpen(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {(Object.keys(VEHICLE_TYPES) as VehicleType[])
+                .filter(
+                  (type) =>
+                    VEHICLE_TYPES[type].stationType === selectedStation.type &&
+                    !disabledVehicleTypes.includes(type),
+                )
+                .map((type) => {
+                  const config = VEHICLE_TYPES[type];
+                  const count = vehicleOrderCounts[type] ?? 0;
+                  const Icon =
+                    type === "ENGINE" || type === "LADDER"
+                      ? Truck
+                      : type === "PATROL" || type === "SWAT"
+                        ? CarFront
+                        : type === "AMBULANCE"
+                          ? Ambulance
+                          : Siren;
+                  return (
+                    <div key={`order-${type}`} className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Icon className="h-4 w-4" />
+                        <span>{config.label}</span>
+                        <span className="text-xs text-slate-400">({config.cost} credits)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setVehicleOrderCounts((current) => ({ ...current, [type]: Math.max((current[type] ?? 0) - 1, 0) }))}>-</Button>
+                        <span className="w-6 text-center">{count}</span>
+                        <Button size="sm" variant="outline" onClick={() => setVehicleOrderCounts((current) => ({ ...current, [type]: (current[type] ?? 0) + 1 }))}>+</Button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+            <div className="mt-3 text-xs text-slate-300">
+              Total order:{" "}
+              {(Object.entries(vehicleOrderCounts) as Array<[VehicleType, number]>)
+                .reduce((sum, [type, qty]) => sum + (qty ?? 0) * VEHICLE_TYPES[type].cost, 0)}
+              {" "}credits
+            </div>
+            <Button
+              size="sm"
+              className="mt-3 w-full"
+              onClick={() => void placeVehicleOrders(selectedStation.id)}
+            >
+              Place order
+            </Button>
           </div>
         </div>
       )}
@@ -3151,5 +3249,6 @@ export default function Page() {
         }))}
       />
     </main>
+    </>
   );
 }
