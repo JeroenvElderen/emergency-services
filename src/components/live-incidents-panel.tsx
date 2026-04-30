@@ -105,7 +105,7 @@ export function LiveIncidentsPanel({
   incomingDeliveries,
 }: Props) {
   const [dispatchIncidentId, setDispatchIncidentId] = useState<number | null>(null);
-  const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
+  const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<VehicleType[]>([]);
   const [routeChoices, setRouteChoices] = useState<Record<number, RouteOption[]>>({});
   const [selectedRoutes, setSelectedRoutes] = useState<Record<number, string>>({});
   const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
@@ -137,6 +137,33 @@ export function LiveIncidentsPanel({
     () =>
       activeIncidents.find((incident) => incident.id === activeDispatchIncidentId) ?? null,
     [activeIncidents, activeDispatchIncidentId],
+  );
+
+  const requiredTypeCounts = useMemo(() => {
+    if (!dispatchIncident) return {} as Partial<Record<VehicleType, number>>;
+    const stage = dispatchIncident.stages[dispatchIncident.currentStage];
+    return (stage?.required ?? []).reduce(
+      (counts, type) => ({
+        ...counts,
+        [type]: (counts[type] ?? 0) + 1,
+      }),
+      {} as Partial<Record<VehicleType, number>>,
+    );
+  }, [dispatchIncident]);
+
+  const missionAvailableTypeCounts = useMemo(
+    () =>
+      availableVehicles.reduce(
+        (counts, vehicle) => {
+          if (!requiredTypeCounts[vehicle.type]) return counts;
+          return {
+            ...counts,
+            [vehicle.type]: (counts[vehicle.type] ?? 0) + 1,
+          };
+        },
+        {} as Partial<Record<VehicleType, number>>,
+      ),
+    [availableVehicles, requiredTypeCounts],
   );
 
   const deliveryTitleByType: Record<VehicleType, string> = {
@@ -215,7 +242,7 @@ export function LiveIncidentsPanel({
                       type="button"
                       onClick={() => {
                         setDispatchIncidentId(incident.id);
-                        setSelectedVehicleIds([]);
+                        setSelectedVehicleTypes([]);
                         setRouteChoices({});
                         setSelectedRoutes({});
                         onRoutePreviewChange(null);
@@ -255,6 +282,9 @@ export function LiveIncidentsPanel({
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Dispatch vehicles</p>
                 <p className="text-sm font-semibold text-slate-100">{dispatchIncident.title}</p>
+                <p className="text-[10px] text-slate-400">
+                  Required: {Object.entries(requiredTypeCounts).map(([type, count]) => `${count} ${type}`).join(", ")}
+                </p>
               </div>
               <Button
                 size="sm"
@@ -266,32 +296,25 @@ export function LiveIncidentsPanel({
             </div>
 
             <div className="max-h-[40vh] space-y-1.5 overflow-y-auto pr-1">
-              {availableVehicles.length === 0 ? (
+              {Object.keys(missionAvailableTypeCounts).length === 0 ? (
                 <p className="text-xs text-slate-400">No available vehicles.</p>
               ) : (
-                availableVehicles.map((vehicle) => {
-                  const selected = selectedVehicleIds.includes(vehicle.id);
+                Object.entries(missionAvailableTypeCounts).map(([type, availableCount]) => {
+                  const vehicleType = type as VehicleType;
+                  const selected = selectedVehicleTypes.includes(vehicleType);
+                  const requiredCount = requiredTypeCounts[vehicleType] ?? 0;
                   return (
                     <button
-                      key={vehicle.id}
+                      key={vehicleType}
                       type="button"
-                      onClick={async () => {
+                      onClick={() => {
                         if (selected) {
-                          setSelectedVehicleIds((current) => current.filter((id) => id !== vehicle.id));
-                          onRoutePreviewChange(null);
+                          setSelectedVehicleTypes((current) =>
+                            current.filter((entry) => entry !== vehicleType),
+                          );
                           return;
                         }
-                        setSelectedVehicleIds((current) => [...current, vehicle.id]);
-                        const options = await onLoadRouteOptions(vehicle.id, dispatchIncident.id);
-                        setRouteChoices((current) => ({ ...current, [vehicle.id]: options }));
-                        if (options[0]) {
-                          setSelectedRoutes((current) => ({ ...current, [vehicle.id]: options[0].key }));
-                          onRoutePreviewChange({
-                            incidentId: dispatchIncident.id,
-                            routes: options,
-                            selectedRouteKey: options[0].key,
-                          });
-                        }
+                        setSelectedVehicleTypes((current) => [...current, vehicleType]);
                       }}
                       className={`flex w-full items-center justify-between rounded-lg border px-2 py-1.5 text-left text-xs transition ${
                         selected
@@ -301,33 +324,39 @@ export function LiveIncidentsPanel({
                     >
                       <span className="flex items-center gap-1.5">
                         <Truck className="h-3.5 w-3.5" />
-                        {vehicle.name} • {vehicle.type}
+                        {vehicleType} • {availableCount} available
                       </span>
+                      <span className="text-[10px] text-slate-300">Need {requiredCount}</span>
                       {selected ? <Check className="h-3.5 w-3.5" /> : null}
                     </button>
                   );
                 })
               )}
-              {selectedVehicleIds.map((vehicleId) => {
-                const options = routeChoices[vehicleId] ?? [];
+              {selectedVehicleTypes.map((vehicleType) => {
+                const requiredCount = requiredTypeCounts[vehicleType] ?? 0;
+                const dispatchableVehicles = availableVehicles
+                  .filter((vehicle) => vehicle.type === vehicleType)
+                  .slice(0, requiredCount);
+                return dispatchableVehicles.map((vehicle) => {
+                const options = routeChoices[vehicle.id] ?? [];
                 if (options.length === 0) return null;
                 return (
-                  <div key={vehicleId} className="rounded border border-slate-700 p-2">
-                    <p className="mb-1 text-[10px] text-slate-300">Route for vehicle #{vehicleId}</p>
+                  <div key={vehicle.id} className="rounded border border-slate-700 p-2">
+                    <p className="mb-1 text-[10px] text-slate-300">Route for {vehicle.name}</p>
                     <div className="space-y-1">
                       {options.map((option) => (
                         <button
                           key={option.key}
                           type="button"
                           onClick={() => {
-                            setSelectedRoutes((current) => ({ ...current, [vehicleId]: option.key }));
+                            setSelectedRoutes((current) => ({ ...current, [vehicle.id]: option.key }));
                             onRoutePreviewChange({
                               incidentId: dispatchIncident.id,
                               routes: options,
                               selectedRouteKey: option.key,
                             });
                           }}
-                          className={`flex w-full items-center justify-between rounded border px-2 py-1 text-[10px] ${selectedRoutes[vehicleId] === option.key ? "border-sky-500 bg-sky-500/10" : "border-slate-700 bg-slate-900"}`}
+                          className={`flex w-full items-center justify-between rounded border px-2 py-1 text-[10px] ${selectedRoutes[vehicle.id] === option.key ? "border-sky-500 bg-sky-500/10" : "border-slate-700 bg-slate-900"}`}
                         >
                           <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: option.color }} />{option.label}</span>
                           <span>{option.distanceKm.toFixed(1)} km • {option.etaSeconds}s</span>
@@ -336,22 +365,34 @@ export function LiveIncidentsPanel({
                     </div>
                   </div>
                 );
+              });
               })}
             </div>
 
             <Button
               className="mt-3 w-full"
-              disabled={selectedVehicleIds.length === 0 || credits < dispatchCost}
-              onClick={() => {
-                selectedVehicleIds.forEach((vehicleId) => {
-                  onDispatchVehicle(vehicleId, dispatchIncident.id, selectedRoutes[vehicleId]);
-                });
+              disabled={selectedVehicleTypes.length === 0 || credits < dispatchCost}
+              onClick={async () => {
+                for (const vehicleType of selectedVehicleTypes) {
+                  const requiredCount = requiredTypeCounts[vehicleType] ?? 0;
+                  const dispatchableVehicles = availableVehicles
+                    .filter((vehicle) => vehicle.type === vehicleType)
+                    .slice(0, requiredCount);
+                  for (const vehicle of dispatchableVehicles) {
+                    const options = await onLoadRouteOptions(vehicle.id, dispatchIncident.id);
+                    setRouteChoices((current) => ({ ...current, [vehicle.id]: options }));
+                    if (options[0] && !selectedRoutes[vehicle.id]) {
+                      setSelectedRoutes((current) => ({ ...current, [vehicle.id]: options[0].key }));
+                    }
+                    onDispatchVehicle(vehicle.id, dispatchIncident.id, selectedRoutes[vehicle.id] ?? options[0]?.key);
+                  }
+                }
                 onRoutePreviewChange(null);
                 setDispatchIncidentId(null);
-                setSelectedVehicleIds([]);
+                setSelectedVehicleTypes([]);
               }}
             >
-              Dispatch selected ({selectedVehicleIds.length})
+              Dispatch selected ({selectedVehicleTypes.length})
             </Button>
           </div>
         </div>
