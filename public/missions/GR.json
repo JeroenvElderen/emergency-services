@@ -1,10 +1,10 @@
 [
   {
     "id": "1",
-    "name": "Fire at Acropolis of Athens",
-    "average_credits": 1000,
+    "name": "Smoking Electrical Box in Athens Apartment",
+    "average_credits": 110,
     "requirements": {
-      "firetrucks": 2
+      "firetrucks": 1
     },
     "prerequisites": {
       "main_building": 0,
@@ -14,17 +14,15 @@
       "fire",
       "urban"
     ],
-    "fixed_location": {
-      "lat": 37.97165171169059, 
-      "lng": 23.725760773267712
-    }
+    "reward_floor": 350,
+    "reward_ceiling": 870
   },
   {
     "id": "2",
-    "name": "Nafplio Town Hall - Small fire",
-    "average_credits": 800,
+    "name": "Balcony Olive Oil Pan Fire",
+    "average_credits": 95,
     "requirements": {
-      "firetrucks": 2
+      "firetrucks": 1
     },
     "prerequisites": {
       "main_building": 0,
@@ -34,17 +32,33 @@
       "fire",
       "urban"
     ],
-    "fixed_location": {
-      "lat": 37.565690011677496, 
-      "lng": 22.800038000789396
-    }
+    "reward_floor": 310,
+    "reward_ceiling": 790
   },
   {
     "id": "3",
-    "name": "Palamidi Fortress - Child stuck in between bars",
-    "average_credits": 1200,
+    "name": "Small Brush Fire by Village Road",
+    "average_credits": 105,
     "requirements": {
-      "firetrucks": 2
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 330,
+    "reward_ceiling": 810
+  },
+  {
+    "id": "4",
+    "name": "Dumpster Fire Near Seafront Promenade",
+    "average_credits": 100,
+    "requirements": {
+      "firetrucks": 1
     },
     "prerequisites": {
       "main_building": 0,
@@ -54,9 +68,115 @@
       "fire",
       "urban"
     ],
-    "fixed_location": {
-      "lat": 37.56214585466694, 
-      "lng": 22.803793235337984
-    }
+    "reward_floor": 320,
+    "reward_ceiling": 800
+  },
+  {
+    "id": "5",
+    "name": "Overheated Wood Oven in Mountain Taverna",
+    "average_credits": 120,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 360,
+    "reward_ceiling": 900
+  },
+  {
+    "id": "6",
+    "name": "Scooter Engine Fire in City Street",
+    "average_credits": 130,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 380,
+    "reward_ceiling": 940
+  },
+  {
+    "id": "7",
+    "name": "Burning Waste Bin at Ferry Port",
+    "average_credits": 85,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 290,
+    "reward_ceiling": 740
+  },
+  {
+    "id": "8",
+    "name": "Small Storage Shed Fire in Olive Grove",
+    "average_credits": 140,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 400,
+    "reward_ceiling": 980
+  },
+  {
+    "id": "9",
+    "name": "Burning Dry Reeds Near Canal",
+    "average_credits": 90,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 300,
+    "reward_ceiling": 760
+  },
+  {
+    "id": "10",
+    "name": "Smoke from Basement Bakery",
+    "average_credits": 125,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 370,
+    "reward_ceiling": 920
   }
 ]
