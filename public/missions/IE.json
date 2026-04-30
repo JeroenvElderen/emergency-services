@@ -243,7 +243,7 @@
     "id": "17",
     "name": "Missing Person Report",
     "average_credits": 150,
-    "requirements": { "patrol_cars": 2 },
+    "requirements": { "patrol_cars": 1 },
     "prerequisites": { "police_stations": 1 },
     "mission_categories": ["police", "search"],
     "reward_floor": 420,
