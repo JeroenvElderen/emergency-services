@@ -202,6 +202,11 @@ type RoutePreviewState = {
   selectedRouteKey?: string;
 };
 
+type VehicleOrderModalState = {
+  stationId: number;
+  quantities: Partial<Record<VehicleType, number>>;
+};
+
 type MapVisualStyle = "DARK_3D" | "SATELLITE_3D";
 
 // MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
@@ -917,6 +922,9 @@ export default function Page() {
     null,
   );
   const [deliveries, setDeliveries] = useState<VehicleDelivery[]>(() => loadDeliveries());
+  const [vehicleOrderModal, setVehicleOrderModal] = useState<VehicleOrderModalState | null>(
+    null,
+  );
   const deliveryMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
   const [incidentNotifications, setIncidentNotifications] = useState<
@@ -2317,14 +2325,27 @@ export default function Page() {
         return {
           ...current,
           nextVehicleId: id + 1,
+          employees: current.employees + config.crew,
           vehicles: [...current.vehicles, vehicle],
           log: [
-            `Delivered ${vehicle.name} from ${findCountry(stationCountry.code).name} depot to ${station.name}.`,
+            `Delivered ${vehicle.name} from ${findCountry(stationCountry.code).name} depot to ${station.name}. Auto-hired ${config.crew} employee${config.crew > 1 ? "s" : ""}.`,
             ...current.log,
           ].slice(0, 10),
         };
       });
     }, deliverySeconds * 1000);
+  }
+
+  async function buyVehiclesInBatch(
+    stationId: number,
+    orders: Partial<Record<VehicleType, number>>,
+  ) {
+    for (const [type, quantity] of Object.entries(orders) as [VehicleType, number][]) {
+      const safeQuantity = Math.max(0, Math.floor(quantity));
+      for (let index = 0; index < safeQuantity; index += 1) {
+        await buyVehicle(stationId, type);
+      }
+    }
   }
 
   function upgradeStationBranch(
@@ -3073,6 +3094,26 @@ export default function Page() {
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
                 Buy vehicles
               </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="mb-2"
+                onClick={() => {
+                  const availableTypes = (Object.keys(VEHICLE_TYPES) as VehicleType[]).filter(
+                    (type) =>
+                      VEHICLE_TYPES[type].stationType === selectedStation.type &&
+                      !disabledVehicleTypes.includes(type),
+                  );
+                  setVehicleOrderModal({
+                    stationId: selectedStation.id,
+                    quantities: Object.fromEntries(
+                      availableTypes.map((type) => [type, 0]),
+                    ) as Partial<Record<VehicleType, number>>,
+                  });
+                }}
+              >
+                Open order popup
+              </Button>
               <div className="grid grid-cols-2 gap-1.5">
                 {(Object.keys(VEHICLE_TYPES) as VehicleType[])
                   .filter(
@@ -3110,6 +3151,61 @@ export default function Page() {
                   })}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {vehicleOrderModal && selectedStation && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/65 p-3">
+          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-950 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Choose vehicles and quantity</h3>
+              <Button size="sm" variant="outline" onClick={() => setVehicleOrderModal(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {(Object.keys(VEHICLE_TYPES) as VehicleType[])
+                .filter(
+                  (type) =>
+                    VEHICLE_TYPES[type].stationType === selectedStation.type &&
+                    !disabledVehicleTypes.includes(type),
+                )
+                .map((type) => (
+                  <div key={`order-${type}`} className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-slate-200">{VEHICLE_TYPES[type].label}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={vehicleOrderModal.quantities[type] ?? 0}
+                      onChange={(event) =>
+                        setVehicleOrderModal((current) =>
+                          current
+                            ? {
+                                ...current,
+                                quantities: {
+                                  ...current.quantities,
+                                  [type]: Math.max(0, Number(event.target.value) || 0),
+                                },
+                              }
+                            : current,
+                        )
+                      }
+                      className="w-20 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-xs"
+                    />
+                  </div>
+                ))}
+            </div>
+            <Button
+              size="sm"
+              className="mt-3 w-full"
+              onClick={() => {
+                void buyVehiclesInBatch(vehicleOrderModal.stationId, vehicleOrderModal.quantities);
+                setVehicleOrderModal(null);
+              }}
+            >
+              Confirm order
+            </Button>
           </div>
         </div>
       )}
