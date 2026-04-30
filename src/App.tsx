@@ -224,7 +224,6 @@ const DISPATCH_COST = 0;
 const UPGRADE_BASE_COST = 20000;
 const HIRING_COST = 0;
 const PAYROLL_PER_EMPLOYEE = 0;
-const STARTING_EMPLOYEES = 10;
 const COUNTRY_LICENSE_COST = 100000;
 const VEHICLE_MAINTENANCE_COST = 900;
 const VEHICLE_MAINTENANCE_SECONDS = 45;
@@ -255,6 +254,15 @@ const MAPBOX_DIRECTIONS_BASE_URL =
 const TERRAIN_EXAGGERATION: Record<MapVisualStyle, number> = {
   SATELLITE_3D: 1.2,
   DARK_3D: 1.35,
+};
+
+const FREE_STATION_STARTER: Record<
+  StationType,
+  { vehicles: number; employees: number }
+> = {
+  FIRE: { vehicles: 2, employees: 10 },
+  EMS: { vehicles: 2, employees: 6 },
+  POLICE: { vehicles: 2, employees: 4 },
 };
 
 const STATION_TYPES = {
@@ -416,7 +424,7 @@ const DEFAULT_DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const initialState: GameState = {
   credits: 100000,
-  employees: STARTING_EMPLOYEES,
+  employees: 0,
   homeCountryCode: "DE",
   activeCountryCode: "DE",
   unlockedCountryCodes: [],
@@ -694,7 +702,7 @@ function loadGame(): GameState {
 
     return {
       ...parsed,
-      employees: parsed.employees ?? 10,
+      employees: parsed.employees ?? 0,
       reputation: Math.max(0, Math.min(100, parsed.reputation ?? 50)),
       weather: parsed.weather ?? "CLEAR",
       weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
@@ -1479,7 +1487,7 @@ export default function Page() {
         if (isFirstStationOfType) {
           const starterType = starterVehicleType(type);
           const freeStationVehicles = Array.from(
-            { length: STARTING_EMPLOYEES },
+            { length: FREE_STATION_STARTER[type].vehicles },
             (_, index) => {
               const vehicleId = nextVehicleId + index;
               return {
@@ -1497,19 +1505,22 @@ export default function Page() {
             },
           );
           vehicles = [...current.vehicles, ...freeStationVehicles];
-          nextVehicleId += STARTING_EMPLOYEES;
+          nextVehicleId += FREE_STATION_STARTER[type].vehicles;
         }
 
         return {
           ...current,
           credits: current.credits - buildCost,
+          employees:
+            current.employees +
+            (isFirstStationOfType ? FREE_STATION_STARTER[type].employees : 0),
           nextStationId: id + 1,
           nextVehicleId,
           stations: [...current.stations, station],
           vehicles,
           log: [
             isFirstStation
-              ? `Built ${station.name}. Game started with ${STARTING_EMPLOYEES} ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and ${STARTING_EMPLOYEES} employees.`
+              ? `Built ${station.name}. Game started with ${FREE_STATION_STARTER[type].vehicles} ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and ${FREE_STATION_STARTER[type].employees} employees.`
               : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.${isFirstStationOfType ? " (Free first station for this department.)" : ""}`,
             ...current.log,
           ].slice(0, 10),
