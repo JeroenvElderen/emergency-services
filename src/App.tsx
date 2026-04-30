@@ -1067,7 +1067,9 @@ export default function Page() {
     return () => window.clearInterval(interval);
   }, [deliveries.length]);
 
-  const sendVehicleToMaintenance = useCallback((vehicleId: number) => {
+  const sendVehicleToMaintenance = useCallback(async (vehicleId: number) => {
+    let maintenanceRoute: [number, number][] | null = null;
+
     setGame((current) => {
       const vehicle = current.vehicles.find((item) => item.id === vehicleId);
       if (!vehicle || vehicle.status !== "AVAILABLE") return current;
@@ -1088,6 +1090,9 @@ export default function Page() {
         const nextKm = haversineKm(station, candidate);
         return nextKm < nearestKm ? candidate : nearest;
       }, maintenanceDepots[0]);
+      const stationRouteStart: [number, number] = [station.lng, station.lat];
+      const depotRouteEnd: [number, number] = [destination.lng, destination.lat];
+      maintenanceRoute = [stationRouteStart, depotRouteEnd];
       setMaintenanceJobs((jobs) => [
         ...jobs,
         {
@@ -1109,10 +1114,7 @@ export default function Page() {
                 ...item,
                 status: "MAINTENANCE",
                 incidentId: null,
-                route: [
-                  [station.lng, station.lat],
-                  [destination.lng, destination.lat],
-                ],
+                route: maintenanceRoute ?? [[station.lng, station.lat], [destination.lng, destination.lat]],
                 eta: VEHICLE_MAINTENANCE_SECONDS,
                 totalEta: VEHICLE_MAINTENANCE_SECONDS,
               }
@@ -1124,7 +1126,24 @@ export default function Page() {
         ].slice(-200),
       };
     });
-  }, []);
+
+    if (!maintenanceRoute || !mapToken) return;
+    const roadRoute = (await fetchRoadRoute(
+      { lat: maintenanceRoute[0][1], lng: maintenanceRoute[0][0] },
+      { lat: maintenanceRoute[1][1], lng: maintenanceRoute[1][0] },
+      mapToken,
+    )) as { distanceKm: number; coordinates: [number, number][] } | null;
+    if (!roadRoute || roadRoute.coordinates.length < 2) return;
+
+    setGame((current) => ({
+      ...current,
+      vehicles: current.vehicles.map((vehicle) =>
+        vehicle.id === vehicleId && vehicle.status === "MAINTENANCE"
+          ? { ...vehicle, route: roadRoute.coordinates }
+          : vehicle,
+      ),
+    }));
+  }, [mapToken]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -1138,7 +1157,7 @@ export default function Page() {
           !activeMaintenanceIds.has(vehicle.id),
       );
       if (!candidate) return;
-      sendVehicleToMaintenance(candidate.id);
+      void sendVehicleToMaintenance(candidate.id);
     }, 18000);
     return () => window.clearInterval(interval);
   }, [game.stations, game.vehicles, maintenanceJobs, sendVehicleToMaintenance]);
@@ -2858,13 +2877,15 @@ export default function Page() {
         const nextCredits = current.credits + creditsEarned;
         const nextMissionDailySpawns = { ...current.missionDailySpawns };
 
+        const completedThisTick =
+          nextIncidents.filter((i) => i.status === "COMPLETE").length -
+          current.incidents.filter((i) => i.status === "COMPLETE").length;
+
         if (creditsEarned > 0) {
-          nextResolvedCount +=
-            nextIncidents.filter((i) => i.status === "COMPLETE").length -
-            current.incidents.filter((i) => i.status === "COMPLETE").length;
+          nextResolvedCount += completedThisTick;
         }
 
-        if (shouldSpawn) {
+        if (shouldSpawn || completedThisTick > 0) {
           const available = chooseIncidentTemplates({
             ...current,
             resolvedCount: nextResolvedCount,
@@ -3480,6 +3501,9 @@ export default function Page() {
                   onClick={() => {
                     const incident = game.incidents.find((item) => item.id === notice.id);
                     if (incident) void dispatchRequiredVehicles(incident);
+                    setIncidentNotifications((current) =>
+                      current.filter((item) => item.id !== notice.id),
+                    );
                   }}
                 >
                   Dispatch now
