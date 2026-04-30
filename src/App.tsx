@@ -68,6 +68,15 @@ type VehicleDelivery = {
   startedAt: number;
   durationSeconds: number;
 };
+type VehicleMaintenanceJob = {
+  id: number;
+  vehicleId: number;
+  stationId: number;
+  destinationLat: number;
+  destinationLng: number;
+  startedAt: number;
+  durationSeconds: number;
+};
 
 type Vehicle = {
   id: number;
@@ -216,6 +225,8 @@ const UPGRADE_BASE_COST = 20000;
 const HIRING_COST = 0;
 const PAYROLL_PER_EMPLOYEE = 0;
 const COUNTRY_LICENSE_COST = 100000;
+const VEHICLE_MAINTENANCE_COST = 900;
+const VEHICLE_MAINTENANCE_SECONDS = 45;
 const STAGE_WORK_SECONDS = 20;
 const FILING_SECONDS = 10;
 const WEATHER_INTERVAL_SECONDS = 75;
@@ -922,6 +933,7 @@ export default function Page() {
     null,
   );
   const [deliveries, setDeliveries] = useState<VehicleDelivery[]>(() => loadDeliveries());
+  const [maintenanceJobs, setMaintenanceJobs] = useState<VehicleMaintenanceJob[]>([]);
   const [vehicleOrderModal, setVehicleOrderModal] = useState<VehicleOrderModalState | null>(
     null,
   );
@@ -1003,6 +1015,42 @@ export default function Page() {
   }, [deliveries, game]);
 
   useEffect(() => {
+    if (maintenanceJobs.length === 0) return;
+    const tickMaintenance = () => {
+      const now = Date.now();
+      const completed = maintenanceJobs.filter(
+        (job) => (now - job.startedAt) / 1000 >= job.durationSeconds,
+      );
+      if (completed.length === 0) return;
+
+      const completedVehicleIds = new Set(completed.map((job) => job.vehicleId));
+      setGame((current) => ({
+        ...current,
+        vehicles: current.vehicles.map((vehicle) =>
+          completedVehicleIds.has(vehicle.id)
+            ? { ...vehicle, status: "AVAILABLE", incidentId: null, eta: 0, totalEta: 0, route: [] }
+            : vehicle,
+        ),
+        log: [
+          ...current.log,
+          ...completed.map((job) => {
+            const vehicle = current.vehicles.find((item) => item.id === job.vehicleId);
+            const station = current.stations.find((item) => item.id === job.stationId);
+            return `${vehicle?.name ?? "Vehicle"} finished maintenance at ${station?.name ?? "station"}.`;
+          }),
+        ].slice(-200),
+      }));
+      setMaintenanceJobs((current) =>
+        current.filter((job) => !completedVehicleIds.has(job.vehicleId)),
+      );
+    };
+
+    tickMaintenance();
+    const interval = window.setInterval(tickMaintenance, 1000);
+    return () => window.clearInterval(interval);
+  }, [maintenanceJobs]);
+
+  useEffect(() => {
     if (deliveries.length === 0) return;
     const tickDeliveries = () => {
       const now = Date.now();
@@ -1023,6 +1071,82 @@ export default function Page() {
     const interval = window.setInterval(tickDeliveries, 1000);
     return () => window.clearInterval(interval);
   }, [deliveries.length]);
+
+  const sendVehicleToMaintenance = useCallback((vehicleId: number) => {
+    setGame((current) => {
+      const vehicle = current.vehicles.find((item) => item.id === vehicleId);
+      if (!vehicle || vehicle.status !== "AVAILABLE") return current;
+      if (current.credits < VEHICLE_MAINTENANCE_COST) return current;
+      const station = current.stations.find((item) => item.id === vehicle.stationId);
+      if (!station) return current;
+      const maintenanceDepots = current.unlockedCountryCodes.map((countryCode) => {
+        const depot = getCountryDepot(countryCode);
+        return {
+          name: `${findCountry(countryCode).name} Maintenance Depot`,
+          lat: depot.lat,
+          lng: depot.lng,
+        };
+      });
+      if (maintenanceDepots.length === 0) return current;
+      const destination = maintenanceDepots.reduce((nearest, candidate) => {
+        const nearestKm = haversineKm(station, nearest);
+        const nextKm = haversineKm(station, candidate);
+        return nextKm < nearestKm ? candidate : nearest;
+      }, maintenanceDepots[0]);
+      setMaintenanceJobs((jobs) => [
+        ...jobs,
+        {
+          id: Date.now() + Math.floor(Math.random() * 1000),
+          vehicleId: vehicle.id,
+          stationId: vehicle.stationId,
+          destinationLat: destination.lat,
+          destinationLng: destination.lng,
+          startedAt: Date.now(),
+          durationSeconds: VEHICLE_MAINTENANCE_SECONDS,
+        },
+      ]);
+      return {
+        ...current,
+        credits: current.credits - VEHICLE_MAINTENANCE_COST,
+        vehicles: current.vehicles.map((item) =>
+          item.id === vehicle.id
+            ? {
+                ...item,
+                status: "MAINTENANCE",
+                incidentId: null,
+                route: [
+                  [station.lng, station.lat],
+                  [destination.lng, destination.lat],
+                ],
+                eta: VEHICLE_MAINTENANCE_SECONDS,
+                totalEta: VEHICLE_MAINTENANCE_SECONDS,
+              }
+            : item,
+        ),
+        log: [
+          ...current.log,
+          `${vehicle.name} auto-routed from ${station.name} to ${destination.name} for maintenance (${VEHICLE_MAINTENANCE_SECONDS}s).`,
+        ].slice(-200),
+      };
+    });
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (Math.random() > 0.2) return;
+      if (game.unlockedCountryCodes.length === 0) return;
+      const activeMaintenanceIds = new Set(maintenanceJobs.map((job) => job.vehicleId));
+      const candidate = game.vehicles.find(
+        (vehicle) =>
+          vehicle.status === "AVAILABLE" &&
+          vehicle.incidentId === null &&
+          !activeMaintenanceIds.has(vehicle.id),
+      );
+      if (!candidate) return;
+      sendVehicleToMaintenance(candidate.id);
+    }, 18000);
+    return () => window.clearInterval(interval);
+  }, [game.stations, game.vehicles, maintenanceJobs, sendVehicleToMaintenance]);
 
   useEffect(() => {
     let mounted = true;
@@ -1860,7 +1984,7 @@ export default function Page() {
       const depot = getCountryDepot(countryCode);
       const el = document.createElement("div");
       el.className = "relative flex h-8 w-8 items-start justify-center";
-      el.title = `${findCountry(countryCode).name} Depot`;
+      el.title = `${findCountry(countryCode).name} Maintenance Depot`;
       el.innerHTML = `
         <div style="position:relative;display:flex;height:24px;width:24px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:rgba(168,85,247,0.95);box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">🏭</div>
       `;
@@ -1934,8 +2058,9 @@ export default function Page() {
 
     game.vehicles.forEach((vehicle) => {
       const shouldRenderVehicle =
-        (vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
-        vehicle.incidentId !== null;
+        vehicle.status === "MAINTENANCE" ||
+        ((vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING") &&
+          vehicle.incidentId !== null);
 
       if (!shouldRenderVehicle) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
@@ -1945,8 +2070,8 @@ export default function Page() {
       }
 
       const station = game.stations.find((s) => s.id === vehicle.stationId);
-      const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
-      if (!station || !incident) {
+      const incident = vehicle.incidentId === null ? null : game.incidents.find((i) => i.id === vehicle.incidentId);
+      if (!station) {
         vehicleMarkerRefs.current.get(vehicle.id)?.remove();
         vehicleMarkerRefs.current.delete(vehicle.id);
         vehicleProgressFloorRef.current.delete(vehicle.id);
@@ -1956,13 +2081,26 @@ export default function Page() {
         vehicle.status === "DISPATCHED" && vehicle.eta <= 0
           ? 0.999
           : getSmoothedProgress(vehicle);
-      const fallback = vehicle.status === "DISPATCHED" ? station : incident;
+      const maintenanceJob = maintenanceJobs.find((job) => job.vehicleId === vehicle.id);
+      const fallback =
+        vehicle.status === "DISPATCHED"
+          ? station
+          : vehicle.status === "MAINTENANCE" && maintenanceJob
+            ? { lat: maintenanceJob.destinationLat, lng: maintenanceJob.destinationLng }
+            : incident ?? station;
       const fullRoute =
         vehicle.route.length >= 2
           ? vehicle.route
           : ([
               [station.lng, station.lat],
-              [incident.lng, incident.lat],
+              [
+                vehicle.status === "MAINTENANCE" && maintenanceJob
+                  ? maintenanceJob.destinationLng
+                  : incident?.lng ?? station.lng,
+                vehicle.status === "MAINTENANCE" && maintenanceJob
+                  ? maintenanceJob.destinationLat
+                  : incident?.lat ?? station.lat,
+              ],
             ] as [number, number][]);
       const [lng, lat] = getRoutePosition(fullRoute, progress, fallback);
 
@@ -1974,7 +2112,9 @@ export default function Page() {
 
       const el = document.createElement("div");
       const color =
-        vehicle.type === "ENGINE" || vehicle.type === "LADDER"
+        vehicle.status === "MAINTENANCE"
+          ? "rgba(168,85,247,0.95)"
+          : vehicle.type === "ENGINE" || vehicle.type === "LADDER"
           ? "rgba(249,115,22,0.95)"
           : vehicle.type === "AMBULANCE" || vehicle.type === "RESCUE"
             ? "rgba(34,197,94,0.95)"
@@ -2046,6 +2186,7 @@ export default function Page() {
     realStations,
     selectedBuild,
     deliveries,
+    maintenanceJobs,
   ]);
 
   useEffect(() => {
@@ -2055,27 +2196,42 @@ export default function Page() {
       if (mapRef.current) {
         game.vehicles.forEach((vehicle) => {
           const moving =
-            vehicle.status === "DISPATCHED" || vehicle.status === "RETURNING";
-          if (!moving || vehicle.incidentId === null) return;
+            vehicle.status === "DISPATCHED" ||
+            vehicle.status === "RETURNING" ||
+            vehicle.status === "MAINTENANCE";
+          if (!moving) return;
 
           const marker = vehicleMarkerRefs.current.get(vehicle.id);
           if (!marker) return;
 
           const station = game.stations.find((s) => s.id === vehicle.stationId);
-          const incident = game.incidents.find((i) => i.id === vehicle.incidentId);
-          if (!station || !incident) return;
+          const incident = vehicle.incidentId === null ? null : game.incidents.find((i) => i.id === vehicle.incidentId);
+          if (!station) return;
+          const maintenanceJob = maintenanceJobs.find((job) => job.vehicleId === vehicle.id);
 
           const progress =
             vehicle.status === "DISPATCHED" && vehicle.eta <= 0
               ? 0.999
               : getSmoothedProgress(vehicle);
-          const fallback = vehicle.status === "DISPATCHED" ? station : incident;
+          const fallback =
+            vehicle.status === "DISPATCHED"
+              ? station
+              : vehicle.status === "MAINTENANCE" && maintenanceJob
+                ? { lat: maintenanceJob.destinationLat, lng: maintenanceJob.destinationLng }
+                : incident ?? station;
           const fullRoute =
             vehicle.route.length >= 2
               ? vehicle.route
               : ([
                   [station.lng, station.lat],
-                  [incident.lng, incident.lat],
+                  [
+                    vehicle.status === "MAINTENANCE" && maintenanceJob
+                      ? maintenanceJob.destinationLng
+                      : incident?.lng ?? station.lng,
+                    vehicle.status === "MAINTENANCE" && maintenanceJob
+                      ? maintenanceJob.destinationLat
+                      : incident?.lat ?? station.lat,
+                  ],
                 ] as [number, number][]);
           const [lng, lat] = getRoutePosition(fullRoute, progress, fallback);
 
@@ -2093,6 +2249,7 @@ export default function Page() {
     game.stations,
     game.vehicles,
     getSmoothedProgress,
+    maintenanceJobs,
   ]);
 
   const chooseIncidentTemplates = useCallback(
@@ -2449,7 +2606,8 @@ export default function Page() {
         let nextVehicles = current.vehicles.map((vehicle) => {
           if (
             (vehicle.status === "DISPATCHED" ||
-              vehicle.status === "RETURNING") &&
+              vehicle.status === "RETURNING" ||
+              vehicle.status === "MAINTENANCE") &&
             vehicle.eta > 0
           ) {
             return {
@@ -3094,9 +3252,12 @@ export default function Page() {
                 {game.vehicles
                   .filter((vehicle) => vehicle.stationId === selectedStation.id)
                   .map((vehicle) => (
-                    <p key={vehicle.id} className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1">
+                    <div
+                      key={vehicle.id}
+                      className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1"
+                    >
                       {vehicle.name} • {vehicle.status}
-                    </p>
+                    </div>
                   ))}
               </div>
               <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
