@@ -110,12 +110,6 @@ export function LiveIncidentsPanel({
   const [selectedRoutes, setSelectedRoutes] = useState<Record<number, string>>({});
   const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
 
-  const dispatchIncident = useMemo(
-    () =>
-      activeIncidents.find((incident) => incident.id === dispatchIncidentId) ?? null,
-    [activeIncidents, dispatchIncidentId],
-  );
-
   const availableVehicles = useMemo(
     () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE"),
     [vehicles],
@@ -128,6 +122,21 @@ export function LiveIncidentsPanel({
         .map((incident) => ({ incident, progress: missionProgress(incident) }))
         .sort((a, b) => b.incident.id - a.incident.id),
     [activeIncidents, missionProgress],
+  );
+
+  const activeDispatchIncidentId = useMemo(() => {
+    if (newIncidents.length === 0) return null;
+    if (dispatchIncidentId === null) return newIncidents[0].incident.id;
+    const selectedStillOpen = newIncidents.some(
+      ({ incident }) => incident.id === dispatchIncidentId,
+    );
+    return selectedStillOpen ? dispatchIncidentId : newIncidents[0].incident.id;
+  }, [dispatchIncidentId, newIncidents]);
+
+  const dispatchIncident = useMemo(
+    () =>
+      activeIncidents.find((incident) => incident.id === activeDispatchIncidentId) ?? null,
+    [activeIncidents, activeDispatchIncidentId],
   );
 
   const deliveryTitleByType: Record<VehicleType, string> = {
