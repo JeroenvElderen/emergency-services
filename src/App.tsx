@@ -944,7 +944,7 @@ export default function Page() {
   >([]);
   const [incomeToasts, setIncomeToasts] = useState<IncomeToast[]>([]);
   const [routePreview, setRoutePreview] = useState<RoutePreviewState | null>(null);
-  const [mapVisualStyle] = useState<MapVisualStyle>("DARK_3D");
+  const [mapVisualStyle] = useState<MapVisualStyle>("SATELLITE_3D");
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const stationMarkerRefs = useRef<mapboxgl.Marker[]>([]);
@@ -2507,7 +2507,26 @@ export default function Page() {
         const station = current.stations.find((item) => item.id === stationId);
 
         if (!station) {
-          return current;
+          return {
+            ...current,
+            credits: current.credits + config.cost,
+            log: [
+              `Delivery for ${config.label} failed because station no longer exists. Refunded ${config.cost} credits.`,
+              ...current.log,
+            ].slice(0, 10),
+          };
+        }
+
+        const currentStationVehicles = current.vehicles.filter((v) => v.stationId === station.id).length;
+        if (station.type !== config.stationType || currentStationVehicles >= stationCapacity(station)) {
+          return {
+            ...current,
+            credits: current.credits + config.cost,
+            log: [
+              `Delivery for ${config.label} to ${station.name} failed (station incompatible or full). Refunded ${config.cost} credits.`,
+              ...current.log,
+            ].slice(0, 10),
+          };
         }
 
         const id = current.nextVehicleId;
