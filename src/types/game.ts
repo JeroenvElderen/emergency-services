@@ -7,5 +7,5 @@ export type VehicleType =
   | "SWAT";
 
 export type IncidentCategory = "FIRE" | "EMS" | "POLICE";
-export type VehicleStatus = "AVAILABLE" | "DISPATCHED" | "RETURNING";
+export type VehicleStatus = "AVAILABLE" | "DISPATCHED" | "RETURNING" | "MAINTENANCE";
 export type IncidentStatus = "OPEN" | "RESPONDING" | "COMPLETE";
