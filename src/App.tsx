@@ -224,6 +224,7 @@ const DISPATCH_COST = 0;
 const UPGRADE_BASE_COST = 20000;
 const HIRING_COST = 0;
 const PAYROLL_PER_EMPLOYEE = 0;
+const STARTING_EMPLOYEES = 10;
 const COUNTRY_LICENSE_COST = 100000;
 const VEHICLE_MAINTENANCE_COST = 900;
 const VEHICLE_MAINTENANCE_SECONDS = 45;
@@ -415,7 +416,7 @@ const DEFAULT_DISABLED_VEHICLE_TYPES: VehicleType[] = ["LADDER"];
 
 const initialState: GameState = {
   credits: 100000,
-  employees: 10,
+  employees: STARTING_EMPLOYEES,
   homeCountryCode: "DE",
   activeCountryCode: "DE",
   unlockedCountryCodes: [],
@@ -1475,36 +1476,28 @@ export default function Page() {
 
         let nextVehicleId = current.nextVehicleId;
         let vehicles = current.vehicles;
-        if (isFirstStation) {
+        if (isFirstStationOfType) {
           const starterType = starterVehicleType(type);
-          vehicles = [
-            ...current.vehicles,
-            {
-              id: nextVehicleId,
-              name: `${VEHICLE_TYPES[starterType].label} ${nextVehicleId}`,
-              type: starterType,
-              stationId: id,
-              status: "AVAILABLE",
-              eta: 0,
-              totalEta: 0,
-              incidentId: null,
-              route: [],
-              speedFactor: createVehicleSpeedFactor(),
+          const freeStationVehicles = Array.from(
+            { length: STARTING_EMPLOYEES },
+            (_, index) => {
+              const vehicleId = nextVehicleId + index;
+              return {
+                id: vehicleId,
+                name: `${VEHICLE_TYPES[starterType].label} ${vehicleId}`,
+                type: starterType,
+                stationId: id,
+                status: "AVAILABLE" as const,
+                eta: 0,
+                totalEta: 0,
+                incidentId: null,
+                route: [],
+                speedFactor: createVehicleSpeedFactor(),
+              };
             },
-            {
-              id: nextVehicleId + 1,
-              name: `${VEHICLE_TYPES[starterType].label} ${nextVehicleId + 1}`,
-              type: starterType,
-              stationId: id,
-              status: "AVAILABLE",
-              eta: 0,
-              totalEta: 0,
-              incidentId: null,
-              route: [],
-              speedFactor: createVehicleSpeedFactor(),
-            },
-          ];
-          nextVehicleId += 2;
+          );
+          vehicles = [...current.vehicles, ...freeStationVehicles];
+          nextVehicleId += STARTING_EMPLOYEES;
         }
 
         return {
@@ -1516,7 +1509,7 @@ export default function Page() {
           vehicles,
           log: [
             isFirstStation
-              ? `Built ${station.name}. Game started with 2 ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and 10 employees.`
+              ? `Built ${station.name}. Game started with ${STARTING_EMPLOYEES} ${VEHICLE_TYPES[starterVehicleType(type)].label.toLowerCase()}s and ${STARTING_EMPLOYEES} employees.`
               : `Built ${station.name} at ${lat.toFixed(4)}, ${lng.toFixed(4)}.${isFirstStationOfType ? " (Free first station for this department.)" : ""}`,
             ...current.log,
           ].slice(0, 10),
