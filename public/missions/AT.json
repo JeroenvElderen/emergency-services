@@ -1,8 +1,8 @@
 [
   {
-    "id": "100",
-    "name": "Bus Stop Waste Bin Fire",
-    "average_credits": 480,
+    "id": "1",
+    "name": "Smoking Electrical Distribution Box",
+    "average_credits": 110,
     "requirements": {
       "firetrucks": 1
     },
@@ -13,6 +13,170 @@
     "mission_categories": [
       "fire",
       "urban"
-    ]
+    ],
+    "reward_floor": 350,
+    "reward_ceiling": 870
+  },
+  {
+    "id": "2",
+    "name": "Balcony Flower Pot Fire",
+    "average_credits": 90,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 300,
+    "reward_ceiling": 780
+  },
+  {
+    "id": "3",
+    "name": "Small Grass Fire Near Road",
+    "average_credits": 100,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 320,
+    "reward_ceiling": 800
+  },
+  {
+    "id": "4",
+    "name": "Trash Fire in Park",
+    "average_credits": 95,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 310,
+    "reward_ceiling": 790
+  },
+  {
+    "id": "5",
+    "name": "Overheated Wood Stove",
+    "average_credits": 120,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 360,
+    "reward_ceiling": 900
+  },
+  {
+    "id": "6",
+    "name": "Car Engine Fire (Parked Vehicle)",
+    "average_credits": 130,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 380,
+    "reward_ceiling": 940
+  },
+  {
+    "id": "7",
+    "name": "Burning Mailbox",
+    "average_credits": 80,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 280,
+    "reward_ceiling": 720
+  },
+  {
+    "id": "8",
+    "name": "Small Shed Fire",
+    "average_credits": 140,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 400,
+    "reward_ceiling": 980
+  },
+  {
+    "id": "9",
+    "name": "Burning Pile of Leaves",
+    "average_credits": 85,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "rural"
+    ],
+    "reward_floor": 290,
+    "reward_ceiling": 740
+  },
+  {
+    "id": "10",
+    "name": "Smoke from Basement (No Open Flames)",
+    "average_credits": 125,
+    "requirements": {
+      "firetrucks": 1
+    },
+    "prerequisites": {
+      "main_building": 0,
+      "fire_stations": 1
+    },
+    "mission_categories": [
+      "fire",
+      "urban"
+    ],
+    "reward_floor": 370,
+    "reward_ceiling": 920
   }
 ]

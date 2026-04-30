@@ -51,6 +51,21 @@ type RealStationSite = {
   lng: number;
 };
 
+type CountryDepot = {
+  countryCode: string;
+  lat: number;
+  lng: number;
+};
+
+type VehicleDelivery = {
+  id: number;
+  vehicleType: VehicleType;
+  stationId: number;
+  progress: number;
+  from: [number, number];
+  to: [number, number];
+};
+
 type Vehicle = {
   id: number;
   name: string;
@@ -188,8 +203,8 @@ type MapVisualStyle = "DARK_3D" | "SATELLITE_3D";
 // MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
 const STATION_COST = 100000;
 const DISPATCH_COST = 0;
-const UPGRADE_BASE_COST = 50000;
-const HIRING_COST = 500;
+const UPGRADE_BASE_COST = 20000;
+const HIRING_COST = 0;
 const PAYROLL_PER_EMPLOYEE = 0;
 const COUNTRY_LICENSE_COST = 100000;
 const STAGE_WORK_SECONDS = 20;
@@ -259,6 +274,24 @@ const EU_COUNTRIES: EuCountry[] = [
   { code: "ES", name: "Spain", center: [-3.7, 40.3], zoom: 5.5, bounds: { minLng: -9.4, maxLng: 3.4, minLat: 35.8, maxLat: 43.9 } },
   { code: "SE", name: "Sweden", center: [16.0, 62.0], zoom: 4.6, bounds: { minLng: 11.0, maxLng: 24.2, minLat: 55.3, maxLat: 69.2 } },
 ];
+
+const findCountryByLocation = (lat: number, lng: number) =>
+  EU_COUNTRIES.find(
+    (country) =>
+      lat >= country.bounds.minLat &&
+      lat <= country.bounds.maxLat &&
+      lng >= country.bounds.minLng &&
+      lng <= country.bounds.maxLng,
+  ) ?? null;
+
+const getCountryDepot = (countryCode: string): CountryDepot => {
+  const country = findCountry(countryCode);
+  return {
+    countryCode,
+    lat: country.bounds.minLat + (country.bounds.maxLat - country.bounds.minLat) * 0.2,
+    lng: country.bounds.minLng + (country.bounds.maxLng - country.bounds.minLng) * 0.2,
+  };
+};
 
 const VEHICLE_TYPES = {
   ENGINE: {
@@ -814,6 +847,8 @@ export default function Page() {
   const [selectedStationId, setSelectedStationId] = useState<number | null>(
     null,
   );
+  const [deliveries, setDeliveries] = useState<VehicleDelivery[]>([]);
+  const deliveryMarkerRefs = useRef<Map<number, mapboxgl.Marker>>(new Map());
   const [focusedIncidentId, setFocusedIncidentId] = useState<number | null>(null);
   const [incidentNotifications, setIncidentNotifications] = useState<
     IncidentNotification[]
@@ -1147,7 +1182,10 @@ export default function Page() {
       const maxAttempts = 25;
 
       if (!map || !map.isStyleLoaded()) {
-        return { lat: station.lat, lng: station.lng };
+        return {
+          lat: station.lat + (Math.random() - 0.5) * maxOffset,
+          lng: station.lng + (Math.random() - 0.5) * maxOffset,
+        };
       }
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -1158,7 +1196,10 @@ export default function Page() {
         if (!intersectsWater) return { lat, lng };
       }
 
-      return { lat: station.lat, lng: station.lng };
+      return {
+        lat: station.lat + (Math.random() - 0.5) * maxOffset,
+        lng: station.lng + (Math.random() - 0.5) * maxOffset,
+      };
     },
     [isWaterFeature],
   );
@@ -1379,7 +1420,7 @@ export default function Page() {
       attributionControl: false,
     });
 
-    const apply3dTerrainAndBuildings = () => {
+    const apply3dTerrain = () => {
       if (!mapRef.current) return;
       if (!mapRef.current.getSource("mapbox-dem")) {
         mapRef.current.addSource("mapbox-dem", {
@@ -1416,36 +1457,9 @@ export default function Page() {
         "high-color": "rgb(26, 56, 92)",
         "horizon-blend": 0.18,
       });
-
-      if (!mapRef.current.getLayer("3d-buildings")) {
-        const layers = mapRef.current.getStyle().layers ?? [];
-        const labelLayerId = layers.find(
-          (layer) =>
-            layer.type === "symbol" &&
-            typeof layer.layout?.["text-field"] !== "undefined",
-        )?.id;
-
-        mapRef.current.addLayer(
-          {
-            id: "3d-buildings",
-            source: "composite",
-            "source-layer": "building",
-            filter: ["==", ["get", "extrude"], "true"],
-            type: "fill-extrusion",
-            minzoom: 14,
-            paint: {
-              "fill-extrusion-color": "#2f3d52",
-              "fill-extrusion-height": ["coalesce", ["get", "height"], 0],
-              "fill-extrusion-base": ["coalesce", ["get", "min_height"], 0],
-              "fill-extrusion-opacity": 0.65,
-            },
-          },
-          labelLayerId,
-        );
-      }
     };
 
-    mapRef.current.on("style.load", apply3dTerrainAndBuildings);
+    mapRef.current.on("style.load", apply3dTerrain);
     mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
 
     return () => {
@@ -1686,6 +1700,27 @@ export default function Page() {
       );
     });
 
+    const depotCountries = new Set(
+      game.stations
+        .map((station) => findCountryByLocation(station.lat, station.lng)?.code)
+        .filter((code): code is string => Boolean(code)),
+    );
+
+    depotCountries.forEach((countryCode) => {
+      const depot = getCountryDepot(countryCode);
+      const el = document.createElement("div");
+      el.className = "relative flex h-8 w-8 items-start justify-center";
+      el.title = `${findCountry(countryCode).name} Depot`;
+      el.innerHTML = `
+        <div style="position:relative;display:flex;height:24px;width:24px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:rgba(168,85,247,0.95);box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">🏭</div>
+      `;
+      stationMarkerRefs.current.push(
+        new mapboxgl.Marker({ element: el, anchor: "center" })
+          .setLngLat([depot.lng, depot.lat])
+          .addTo(mapRef.current!),
+      );
+    });
+
     activeIncidents.forEach((incident) => {
       const phase = getIncidentMarkerPhase(incident, game.vehicles);
       const markerStyle = INCIDENT_MARKER_PHASE_STYLES[phase];
@@ -1713,6 +1748,34 @@ export default function Page() {
           .setLngLat([incident.lng, incident.lat])
           .addTo(mapRef.current!),
       );
+    });
+
+    deliveries.forEach((delivery) => {
+      const [lng, lat] = getRoutePosition([delivery.from, delivery.to], delivery.progress, { lat: delivery.to[1], lng: delivery.to[0] });
+      const existing = deliveryMarkerRefs.current.get(delivery.id);
+      if (existing) {
+        existing.setLngLat([lng, lat]);
+        return;
+      }
+
+      const el = document.createElement("div");
+      el.className = "relative flex h-8 w-8 items-start justify-center";
+      el.innerHTML = `
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:rgba(168,85,247,0.95);box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;">🚛</div>
+      `;
+      deliveryMarkerRefs.current.set(
+        delivery.id,
+        new mapboxgl.Marker({ element: el, anchor: "bottom" })
+          .setLngLat([lng, lat])
+          .addTo(mapRef.current!),
+      );
+    });
+
+    deliveryMarkerRefs.current.forEach((marker, id) => {
+      if (!deliveries.find((delivery) => delivery.id === id)) {
+        marker.remove();
+        deliveryMarkerRefs.current.delete(id);
+      }
     });
 
     game.vehicles.forEach((vehicle) => {
@@ -1821,6 +1884,7 @@ export default function Page() {
     isSelectingRealStation,
     realStations,
     selectedBuild,
+    deliveries,
   ]);
 
   useEffect(() => {
@@ -2041,51 +2105,85 @@ export default function Page() {
   }
 
   function buyVehicle(stationId: number, type: VehicleType) {
-    setGame((current) => {
-      const config = VEHICLE_TYPES[type];
-      const station = current.stations.find((item) => item.id === stationId);
+    const station = game.stations.find((item) => item.id === stationId);
+    if (!station) return;
+    const stationCountry = findCountryByLocation(station.lat, station.lng);
+    if (!stationCountry) return;
+    const depot = getCountryDepot(stationCountry.code);
 
-      if (
-        !station ||
-        station.type !== config.stationType ||
-        current.credits < config.cost
-      ) {
-        return current;
-      }
-      const staffed = current.vehicles.reduce(
-        (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
-        0,
+    const deliveryId = Date.now() + Math.floor(Math.random() * 1000);
+    setDeliveries((current) => [
+      ...current,
+      {
+        id: deliveryId,
+        vehicleType: type,
+        stationId,
+        progress: 0,
+        from: [depot.lng, depot.lat],
+        to: [station.lng, station.lat],
+      },
+    ]);
+
+    const deliverySeconds = Math.max(6, Math.round(haversineKm({ lat: depot.lat, lng: depot.lng }, station) * 40));
+
+    const interval = window.setInterval(() => {
+      setDeliveries((current) =>
+        current.map((delivery) =>
+          delivery.id === deliveryId
+            ? { ...delivery, progress: Math.min(1, delivery.progress + 1 / deliverySeconds) }
+            : delivery,
+        ),
       );
-      if (current.employees - staffed < config.crew) return current;
-      const used = current.vehicles.filter(
-        (v) => v.stationId === station.id,
-      ).length;
-      if (used >= stationCapacity(station)) return current;
+      }, 1000);
 
-      const id = current.nextVehicleId;
-      const vehicle: Vehicle = {
-        id,
-        name: `${config.label} ${id}`,
-        type,
-        stationId: station.id,
-        status: "AVAILABLE",
-        eta: 0,
-        totalEta: 0,
-        incidentId: null,
-        route: [],
-      };
+      window.setTimeout(() => {
+      window.clearInterval(interval);
+      setDeliveries((current) => current.filter((delivery) => delivery.id !== deliveryId));
 
-      return {
-        ...current,
-        credits: current.credits - config.cost,
-        nextVehicleId: id + 1,
-        vehicles: [...current.vehicles, vehicle],
-        log: [
-          `Purchased ${vehicle.name} for ${station.name}.`,
-          ...current.log,
-        ].slice(0, 10),
-      };
-    });
+      setGame((current) => {
+        const config = VEHICLE_TYPES[type];
+        const station = current.stations.find((item) => item.id === stationId);
+
+        if (
+          !station ||
+          station.type !== config.stationType ||
+          current.credits < config.cost
+        ) {
+          return current;
+        }
+        const staffed = current.vehicles.reduce(
+          (sum, vehicle) => sum + VEHICLE_TYPES[vehicle.type].crew,
+          0,
+        );
+        if (current.employees - staffed < config.crew) return current;
+        const used = current.vehicles.filter((v) => v.stationId === station.id).length;
+        if (used >= stationCapacity(station)) return current;
+
+        const id = current.nextVehicleId;
+        const vehicle: Vehicle = {
+          id,
+          name: `${config.label} ${id}`,
+          type,
+          stationId: station.id,
+          status: "AVAILABLE",
+          eta: 0,
+          totalEta: 0,
+          incidentId: null,
+          route: [],
+        };
+
+        return {
+          ...current,
+          credits: current.credits - config.cost,
+          nextVehicleId: id + 1,
+          vehicles: [...current.vehicles, vehicle],
+          log: [
+            `Delivered ${vehicle.name} from ${findCountry(stationCountry.code).name} depot to ${station.name}.`,
+            ...current.log,
+          ].slice(0, 10),
+        };
+      });
+    }, deliverySeconds * 1000);
   }
 
   function upgradeStationBranch(
@@ -2096,7 +2194,7 @@ export default function Page() {
       const station = current.stations.find((s) => s.id === stationId);
       if (!station) return current;
       const currentTier = station.upgrades[branch];
-      const cost = Math.round((UPGRADE_BASE_COST * 0.45) + (currentTier + 1) * 18000);
+      const cost = Math.round((UPGRADE_BASE_COST * 0.4) + (currentTier + 1) * 10000);
       if (current.credits < cost) return current;
 
       return {
@@ -2123,7 +2221,7 @@ export default function Page() {
   }
 
   function startTrainingCourse(stationId: number, course: "TRIAGE" | "TACTICS" | "COMM") {
-    const costs = { TRIAGE: 2800, TACTICS: 4200, COMM: 3500 };
+    const costs = { TRIAGE: 1200, TACTICS: 1800, COMM: 1500 };
     const repGain = { TRIAGE: 1, TACTICS: 2, COMM: 1 };
     setGame((current) => {
       const station = current.stations.find((s) => s.id === stationId);
@@ -2764,26 +2862,26 @@ export default function Page() {
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)}
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.bayCapacity + 1) * 10000)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "bayCapacity")}
               >
-                Bay +2 ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.bayCapacity + 1) * 18000)})
+                Bay +2 ({Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.bayCapacity + 1) * 10000)})
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)}
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.dispatchCenter + 1) * 10000)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "dispatchCenter")}
               >
-                Dispatch ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.dispatchCenter + 1) * 18000)})
+                Dispatch ({Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.dispatchCenter + 1) * 10000)})
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)}
+                disabled={game.credits < Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.trainingWing + 1) * 10000)}
                 onClick={() => upgradeStationBranch(selectedStation.id, "trainingWing")}
               >
-                Training Wing ({Math.round((UPGRADE_BASE_COST * 0.45) + (selectedStation.upgrades.trainingWing + 1) * 18000)})
+                Training Wing ({Math.round((UPGRADE_BASE_COST * 0.4) + (selectedStation.upgrades.trainingWing + 1) * 10000)})
               </Button>
               <Button size="sm" variant="outline" disabled={game.credits < HIRING_COST} onClick={() => hireEmployee(1)}>
                 <UserPlus className="mr-1 h-3.5 w-3.5" />
