@@ -1,5 +1,5 @@
 import { Check, Truck } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { IncidentStatus, VehicleStatus, VehicleType } from "@/types/game";
@@ -166,6 +166,46 @@ export function LiveIncidentsPanel({
     [availableVehicles, requiredTypeCounts],
   );
 
+  useEffect(() => {
+    if (!dispatchIncident || selectedVehicleTypes.length === 0) return;
+    let cancelled = false;
+    const incidentId = dispatchIncident.id;
+
+    async function preloadRoutes() {
+      for (const vehicleType of selectedVehicleTypes) {
+        const requiredCount = requiredTypeCounts[vehicleType] ?? 0;
+        if (requiredCount <= 0) continue;
+        const dispatchableVehicles = availableVehicles
+          .filter((vehicle) => vehicle.type === vehicleType)
+          .slice(0, requiredCount);
+
+        for (const vehicle of dispatchableVehicles) {
+          if ((routeChoices[vehicle.id] ?? []).length > 0) continue;
+          const options = await onLoadRouteOptions(vehicle.id, incidentId);
+          if (cancelled || options.length === 0) continue;
+          setRouteChoices((current) =>
+            (current[vehicle.id] ?? []).length > 0 ? current : { ...current, [vehicle.id]: options },
+          );
+          setSelectedRoutes((current) =>
+            current[vehicle.id] ? current : { ...current, [vehicle.id]: options[0].key },
+          );
+        }
+      }
+    }
+
+    void preloadRoutes();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    availableVehicles,
+    dispatchIncident,
+    onLoadRouteOptions,
+    requiredTypeCounts,
+    routeChoices,
+    selectedVehicleTypes,
+  ]);
+
   const deliveryTitleByType: Record<VehicleType, string> = {
     ENGINE: "New firetruck",
     LADDER: "New ladder truck",
@@ -196,7 +236,7 @@ export function LiveIncidentsPanel({
         {mobileBoardOpen ? "Hide popups" : `Popups (${newIncidents.length})`}
       </Button>
 
-      <div className={`absolute bottom-2 left-2 right-2 z-30 max-h-[42vh] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-sm md:bottom-3 md:left-auto md:right-3 md:max-h-[45vh] md:w-[min(96vw,1100px)] md:p-2.5 ${mobileBoardOpen ? "block" : "hidden"} md:block`}>
+      <div className={`absolute bottom-2 left-2 right-2 z-30 max-h-[42vh] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-sm ${mobileBoardOpen ? "block" : "hidden"} md:hidden`}>
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-bold uppercase tracking-wide text-slate-100">New Incident Popups</h2>
         <Button
