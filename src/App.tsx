@@ -228,7 +228,8 @@ const COUNTRY_LICENSE_COST = 100000;
 const VEHICLE_MAINTENANCE_COST = 900;
 const VEHICLE_MAINTENANCE_SECONDS = 45;
 const STAGE_WORK_SECONDS = 20;
-const FILING_SECONDS = 10;
+const missionStageDurationSeconds = (difficulty: number) =>
+  Math.round(STAGE_WORK_SECONDS * (1 + Math.max(difficulty - 1, 0) * 0.12));
 const WEATHER_INTERVAL_SECONDS = 75;
 const VEHICLE_SPEED_VARIANCE = {
   min: 0.82,
@@ -712,8 +713,8 @@ function loadGame(): GameState {
         isSpecialMission: incident.isSpecialMission ?? false,
         stageWorkRemaining: incident.stageWorkRemaining ?? STAGE_WORK_SECONDS,
         stageWorkTotal: incident.stageWorkTotal ?? STAGE_WORK_SECONDS,
-        filingRemaining: incident.filingRemaining ?? FILING_SECONDS,
-        filingTotal: incident.filingTotal ?? FILING_SECONDS,
+        filingRemaining: incident.filingRemaining ?? 0,
+        filingTotal: incident.filingTotal ?? 0,
       })),
       vehicles: parsed.vehicles.map((vehicle) => ({
         ...vehicle,
@@ -852,8 +853,7 @@ type IncidentMarkerPhase =
   | "UNTOUCHED"
   | "EN_ROUTE"
   | "ON_SCENE"
-  | "RETURNING"
-  | "FILING";
+  | "RETURNING";
 
 const INCIDENT_MARKER_PHASE_STYLES: Record<
   IncidentMarkerPhase,
@@ -863,7 +863,6 @@ const INCIDENT_MARKER_PHASE_STYLES: Record<
   EN_ROUTE: { label: "Truck en route", background: "#f59e0b" },
   ON_SCENE: { label: "Truck on scene", background: "#16a34a" },
   RETURNING: { label: "Truck returning", background: "#2563eb" },
-  FILING: { label: "Filing report", background: "#6b7280" },
 };
 
 function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
@@ -871,10 +870,6 @@ function getIncidentMarkerPhase(incident: Incident, vehicles: Vehicle[]) {
   const hasReturning = assigned.some((vehicle) => vehicle.status === "RETURNING");
   if (hasReturning) return "RETURNING" as const;
 
-  const isFilingStage =
-    incident.currentStage >= incident.stages.length - 1 &&
-    incident.stageWorkRemaining <= 0;
-  if (isFilingStage) return "FILING" as const;
 
   const hasOnScene = assigned.some(
     (vehicle) => vehicle.status === "DISPATCHED" && vehicle.eta <= 0,
@@ -1333,21 +1328,9 @@ export default function Page() {
               return sum + (1 - Math.max(vehicle.eta, 0) / vehicle.totalEta);
             }, 0) / assigned.length;
 
-      const filingProgress =
-        incident.filingTotal <= 0
-          ? 1
-          : 1 - Math.max(incident.filingRemaining, 0) / incident.filingTotal;
-
       const overall = Math.max(
         0,
-        Math.min(
-          1,
-          (etaProgress +
-            missionStageProgress +
-            returnProgress +
-            filingProgress) /
-            4,
-        ),
+        Math.min(1, (etaProgress + missionStageProgress + returnProgress) / 3),
       );
 
       const requiredCounts = currentStage
@@ -1380,7 +1363,7 @@ export default function Page() {
         eta: etaProgress,
         mission: missionStageProgress,
         returnTrip: returnProgress,
-        filing: filingProgress,
+        filing: 1,
         colorClass: hasVehicleOnWay
           ? "bg-amber-500"
           : atScene
@@ -2009,7 +1992,7 @@ export default function Page() {
       .forEach((incident) => {
       const phase = getIncidentMarkerPhase(incident, game.vehicles);
       const markerStyle = INCIDENT_MARKER_PHASE_STYLES[phase];
-      if (phase === "RETURNING" || phase === "FILING") {
+      if (phase === "RETURNING") {
         return;
       }
 
@@ -2137,6 +2120,7 @@ export default function Page() {
             ? "rgba(34,197,94,0.95)"
             : "rgba(14,165,233,0.95)";
       const isResponding = vehicle.status === "DISPATCHED" && vehicle.eta > 0;
+      const isReturning = vehicle.status === "RETURNING" && vehicle.eta > 0;
       const icon =
         vehicle.type === "ENGINE" || vehicle.type === "LADDER"
           ? "🚒"
@@ -2147,7 +2131,7 @@ export default function Page() {
               : "🚓";
       el.className = "relative flex h-8 w-8 items-start justify-center";
       el.innerHTML = `
-        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : "none"};">
+        <div style="position:relative;display:flex;height:23px;width:23px;align-items:center;justify-content:center;border-radius:7px;border:2px solid rgba(15,23,42,0.95);background:${color};box-shadow:0 4px 10px rgba(15,23,42,0.5);font-size:12px;animation:${isResponding ? "vehicle-emergency-blink 0.9s steps(1,end) infinite" : isReturning ? "vehicle-return-blink 0.9s steps(1,end) infinite" : "none"};">
           ${icon}
         </div>
         <div style="position:absolute;bottom:0;left:50%;transform:translateX(-50%);width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid ${color};filter:drop-shadow(0 2px 2px rgba(15,23,42,0.6));"></div>
@@ -2743,10 +2727,7 @@ export default function Page() {
                 !assignedIds.has(vehicle.id) ||
                 (vehicle.status === "AVAILABLE" && vehicle.incidentId === null),
             );
-            const nextFiling = allBackAtStation
-              ? Math.max(nextIncident.filingRemaining - elapsedTicks, 0)
-              : nextIncident.filingRemaining;
-            if (allBackAtStation && nextFiling === 0) {
+            if (allBackAtStation) {
               const missionCrewCost = assignedVehicles.reduce(
                 (sum, vehicle) =>
                   sum + VEHICLE_TYPES[vehicle.type].crew * PAYROLL_PER_EMPLOYEE,
@@ -2776,7 +2757,7 @@ export default function Page() {
 
             return {
               ...nextIncident,
-              filingRemaining: nextFiling,
+              filingRemaining: 0,
               stageWorkRemaining: 0,
             };
           }
@@ -2787,8 +2768,72 @@ export default function Page() {
           return {
             ...nextIncident,
             currentStage: nextStage,
-            stageWorkRemaining: STAGE_WORK_SECONDS,
-            stageWorkTotal: STAGE_WORK_SECONDS,
+            stageWorkRemaining: missionStageDurationSeconds(nextIncident.severity),
+            stageWorkTotal: missionStageDurationSeconds(nextIncident.severity),
+          };
+        });
+
+        const incidentIndexById = new Map(nextIncidents.map((incident, index) => [incident.id, index]));
+        nextVehicles = nextVehicles.map((vehicle) => {
+          if (vehicle.status !== "RETURNING" || vehicle.incidentId === null) return vehicle;
+
+          const sourceIncident = nextIncidents.find((incident) => incident.id === vehicle.incidentId);
+          if (!sourceIncident) return vehicle;
+
+          const station = current.stations.find((s) => s.id === vehicle.stationId);
+          if (!station) return vehicle;
+
+          const targetIncident = nextIncidents.find((candidate) => {
+            if (candidate.status === "COMPLETE" || candidate.id === sourceIncident.id) return false;
+            if (candidate.assignedVehicleIds.includes(vehicle.id)) return false;
+            const stage = candidate.stages[candidate.currentStage];
+            if (!stage) return false;
+            const requiredCounts = requirementCounts(stage.required);
+            const assignedCounts = candidate.assignedVehicleIds
+              .map((id) => nextVehicles.find((item) => item.id === id))
+              .filter((item): item is Vehicle => Boolean(item))
+              .reduce((counts, item) => ({
+                ...counts,
+                [item.type]: (counts[item.type] ?? 0) + 1,
+              }), {} as Partial<Record<VehicleType, number>>);
+            return (assignedCounts[vehicle.type] ?? 0) < (requiredCounts[vehicle.type] ?? 0);
+          });
+
+          if (!targetIncident) return vehicle;
+
+          const dispatchUpgrade = 1 + (station.upgrades.dispatchCenter ?? 0) * 0.06;
+          const transferKm = haversineKm(sourceIncident, targetIncident);
+          const transferEta = Math.max(
+            8,
+            Math.round(
+              (transferKm /
+                resolveVehicleSpeedKmh(vehicle, current.weather, dispatchUpgrade)) *
+                3600,
+            ),
+          );
+
+          const targetIndex = incidentIndexById.get(targetIncident.id);
+          if (typeof targetIndex === "number") {
+            const existing = nextIncidents[targetIndex];
+            nextIncidents[targetIndex] = {
+              ...existing,
+              status: "RESPONDING",
+              assignedVehicleIds: existing.assignedVehicleIds.includes(vehicle.id)
+                ? existing.assignedVehicleIds
+                : [...existing.assignedVehicleIds, vehicle.id],
+            };
+          }
+
+          return {
+            ...vehicle,
+            status: "DISPATCHED" as VehicleStatus,
+            incidentId: targetIncident.id,
+            eta: transferEta,
+            totalEta: transferEta,
+            route: [
+              [sourceIncident.lng, sourceIncident.lat],
+              [targetIncident.lng, targetIncident.lat],
+            ],
           };
         });
 
@@ -2882,10 +2927,10 @@ export default function Page() {
               currentStage: 0,
               stages: template.stages,
               assignedVehicleIds: [],
-              stageWorkRemaining: STAGE_WORK_SECONDS,
-              stageWorkTotal: STAGE_WORK_SECONDS,
-              filingRemaining: FILING_SECONDS,
-              filingTotal: FILING_SECONDS,
+              stageWorkRemaining: missionStageDurationSeconds(difficulty),
+              stageWorkTotal: missionStageDurationSeconds(difficulty),
+              filingRemaining: 0,
+              filingTotal: 0,
             };
             nextIncidentId += 1;
             if (isSpecialMission) {
@@ -2975,7 +3020,7 @@ export default function Page() {
 
   return (
     <>
-      <style>{`@keyframes vehicle-emergency-blink { 0%, 49% { background: rgba(239,68,68,0.95); } 50%, 100% { background: rgba(59,130,246,0.95); } }`}</style>
+      <style>{`@keyframes vehicle-emergency-blink { 0%, 49% { background: rgba(239,68,68,0.95); } 50%, 100% { background: rgba(59,130,246,0.95); } } @keyframes vehicle-return-blink { 0%, 49% { background: rgba(239,68,68,0.95); } 50%, 100% { background: rgba(220,38,38,0.95); } }`}</style>
     <main className="relative h-[100dvh] w-[100dvw] overflow-hidden bg-[#0b1727] text-slate-100">
       {mapToken ? (
         <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" />
