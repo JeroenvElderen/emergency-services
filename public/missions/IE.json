@@ -183,9 +183,16 @@
     "id": "11",
     "name": "Shoplifting Report in Retail Store",
     "average_credits": 90,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 280,
     "reward_ceiling": 720
   },
@@ -193,9 +200,16 @@
     "id": "12",
     "name": "Public Disturbance Outside Licensed Premises",
     "average_credits": 110,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 320,
     "reward_ceiling": 800
   },
@@ -203,9 +217,16 @@
     "id": "13",
     "name": "Suspicious Vehicle Report on Rural Road",
     "average_credits": 100,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "rural"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "rural"
+    ],
     "reward_floor": 300,
     "reward_ceiling": 760
   },
@@ -213,9 +234,16 @@
     "id": "14",
     "name": "Minor Road Traffic Collision",
     "average_credits": 120,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "traffic"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "traffic"
+    ],
     "reward_floor": 350,
     "reward_ceiling": 880
   },
@@ -223,9 +251,16 @@
     "id": "15",
     "name": "Burglary Alarm Activation at Residence",
     "average_credits": 130,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 380,
     "reward_ceiling": 920
   },
@@ -233,9 +268,16 @@
     "id": "16",
     "name": "Vandalism Report in Public Park",
     "average_credits": 85,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 270,
     "reward_ceiling": 700
   },
@@ -243,9 +285,16 @@
     "id": "17",
     "name": "Missing Person Report",
     "average_credits": 150,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "search"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "search"
+    ],
     "reward_floor": 420,
     "reward_ceiling": 1000
   },
@@ -253,9 +302,16 @@
     "id": "18",
     "name": "Illegal Dumping Investigation in Rural Area",
     "average_credits": 95,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "rural"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "rural"
+    ],
     "reward_floor": 290,
     "reward_ceiling": 740
   },
@@ -263,9 +319,16 @@
     "id": "19",
     "name": "Noise Complaint from Residential Area",
     "average_credits": 80,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 250,
     "reward_ceiling": 680
   },
@@ -273,10 +336,34 @@
     "id": "20",
     "name": "Assistance Required for Intoxicated Person",
     "average_credits": 105,
-    "requirements": { "patrol_cars": 1 },
-    "prerequisites": { "police_stations": 1 },
-    "mission_categories": ["police", "urban"],
+    "requirements": {
+      "patrol_cars": 1
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "urban"
+    ],
     "reward_floor": 310,
     "reward_ceiling": 780
+  },
+  {
+    "id": "21",
+    "name": "Active Vehicle Pursuit (Police Chasing Suspect)",
+    "average_credits": 170,
+    "requirements": {
+      "patrol_cars": 2
+    },
+    "prerequisites": {
+      "police_stations": 1
+    },
+    "mission_categories": [
+      "police",
+      "traffic"
+    ],
+    "reward_floor": 460,
+    "reward_ceiling": 1150
   }
 ]
