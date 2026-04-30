@@ -111,7 +111,7 @@ export function LiveIncidentsPanel({
   const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
 
   const availableVehicles = useMemo(
-    () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE"),
+    () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE" || vehicle.status === "RETURNING"),
     [vehicles],
   );
 

@@ -2326,7 +2326,7 @@ export default function Page() {
       if (
         !vehicle ||
         !incident ||
-        vehicle.status !== "AVAILABLE" ||
+        (vehicle.status !== "AVAILABLE" && vehicle.status !== "RETURNING") ||
         current.credits < DISPATCH_COST ||
         incident.assignedVehicleIds.includes(vehicleId)
       ) {
