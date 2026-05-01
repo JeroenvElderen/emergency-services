@@ -577,10 +577,18 @@ function isSpecialMissionDefinition(mission: MissionDefinition) {
 }
 
 function missionSpawnIntervalSeconds(stationCount: number, resolvedCount: number) {
-  if (stationCount <= 2) return 5 * 60;
-  if (stationCount <= 5) return 4 * 60;
-  if (resolvedCount >= 80) return 2 * 60;
-  return 3 * 60;
+  let baseIntervalSeconds = 90;
+
+  if (stationCount <= 2) {
+    baseIntervalSeconds = 150;
+  } else if (stationCount <= 5) {
+    baseIntervalSeconds = 120;
+  } else if (resolvedCount >= 80) {
+    baseIntervalSeconds = 75;
+  }
+
+  const randomVariance = rand(-25, 20);
+  return Math.max(45, baseIntervalSeconds + randomVariance);
 }
 
 function normalizeRequirementKey(value: string) {
