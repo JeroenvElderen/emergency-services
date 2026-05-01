@@ -365,5 +365,175 @@
     ],
     "reward_floor": 460,
     "reward_ceiling": 1150
+  },
+  {
+    "id": "22",
+    "name": "Chest Pain at Dublin Office",
+    "average_credits": 120,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 340,
+    "reward_ceiling": 860
+  },
+  {
+    "id": "23",
+    "name": "Fall Injury at Suburban Home",
+    "average_credits": 100,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 300,
+    "reward_ceiling": 760
+  },
+  {
+    "id": "24",
+    "name": "Cyclist Collision on Country Lane",
+    "average_credits": 115,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "rural"
+    ],
+    "reward_floor": 330,
+    "reward_ceiling": 820
+  },
+  {
+    "id": "25",
+    "name": "Breathing Difficulty at Shopping Centre",
+    "average_credits": 110,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 320,
+    "reward_ceiling": 800
+  },
+  {
+    "id": "26",
+    "name": "Elderly Person Collapse in Village",
+    "average_credits": 125,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "rural"
+    ],
+    "reward_floor": 350,
+    "reward_ceiling": 880
+  },
+  {
+    "id": "27",
+    "name": "Sports Injury at GAA Pitch",
+    "average_credits": 95,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 290,
+    "reward_ceiling": 740
+  },
+  {
+    "id": "28",
+    "name": "Unresponsive Person at Bus Stop",
+    "average_credits": 130,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 360,
+    "reward_ceiling": 900
+  },
+  {
+    "id": "29",
+    "name": "Allergic Reaction at Restaurant",
+    "average_credits": 105,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 310,
+    "reward_ceiling": 780
+  },
+  {
+    "id": "30",
+    "name": "Farm Machinery Minor Injury",
+    "average_credits": 110,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "rural"
+    ],
+    "reward_floor": 320,
+    "reward_ceiling": 810
+  },
+  {
+    "id": "31",
+    "name": "Possible Stroke at Community Centre",
+    "average_credits": 135,
+    "requirements": {
+      "ambulances": 1
+    },
+    "prerequisites": {
+      "ems_stations": 1
+    },
+    "mission_categories": [
+      "ems",
+      "urban"
+    ],
+    "reward_floor": 370,
+    "reward_ceiling": 930
   }
 ]

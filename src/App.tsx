@@ -576,19 +576,8 @@ function isSpecialMissionDefinition(mission: MissionDefinition) {
   return mission.special ?? Boolean(mission.fixed_location);
 }
 
-function missionSpawnIntervalSeconds(stationCount: number, resolvedCount: number) {
-  let baseIntervalSeconds = 90;
-
-  if (stationCount <= 2) {
-    baseIntervalSeconds = 150;
-  } else if (stationCount <= 5) {
-    baseIntervalSeconds = 120;
-  } else if (resolvedCount >= 80) {
-    baseIntervalSeconds = 75;
-  }
-
-  const randomVariance = rand(-25, 20);
-  return Math.max(45, baseIntervalSeconds + randomVariance);
+function missionSpawnIntervalSeconds() {
+  return 60;
 }
 
 function normalizeRequirementKey(value: string) {
@@ -2651,14 +2640,13 @@ export default function Page() {
           {} as Partial<Record<IncidentCategory, number>>,
         );
         const progressionBuffer = Math.min(6, Math.floor(current.resolvedCount / 25));
-        const maxActiveIncidents = Math.max(
+        const capacityByStations = Math.max(
           1,
           current.stations.length * 2 + progressionBuffer,
         );
-        const intervalSeconds = missionSpawnIntervalSeconds(
-          current.stations.length,
-          current.resolvedCount,
-        );
+        const capacityByVehicles = Math.max(1, current.vehicles.length);
+        const maxActiveIncidents = Math.min(capacityByStations, capacityByVehicles);
+        const intervalSeconds = missionSpawnIntervalSeconds();
         const intervalMs = intervalSeconds * 1000;
         const shouldSpawn =
           current.stations.length > 0 &&
