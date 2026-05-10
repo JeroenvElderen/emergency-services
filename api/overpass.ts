@@ -52,7 +52,19 @@ async function fetchOverpass(query: string) {
   return { ok: false as const, ...(lastError ?? { endpoint: "unknown", status: 502, details: "Unknown Overpass failure" }) };
 }
 
-export default async function handler(req: any, res: any) {
+type OverpassRequest = {
+  method?: string;
+  body?: string | { query?: unknown };
+};
+
+type OverpassResponse = {
+  status: (code: number) => OverpassResponse;
+  json: (body: unknown) => void;
+  send: (body: string) => void;
+  setHeader: (name: string, value: string) => void;
+};
+
+export default async function handler(req: OverpassRequest, res: OverpassResponse) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;

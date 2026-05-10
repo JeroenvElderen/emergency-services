@@ -1,8 +1,8 @@
-import { Check, Truck } from "lucide-react";
+import { Check, Clock, Fuel, MapPin, Sparkles, Truck, Users } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
-import type { IncidentStatus, VehicleStatus, VehicleType } from "@/types/game";
+import type { IncidentCategory, IncidentStatus, VehicleStatus, VehicleType } from "@/types/game";
 
 type IncidentStage = {
   label: string;
@@ -12,6 +12,7 @@ type IncidentStage = {
 export type IncidentLike = {
   id: number;
   title: string;
+  category: IncidentCategory;
   status: IncidentStatus;
   reward: number;
   lat: number;
@@ -26,6 +27,8 @@ type VehicleLike = {
   name: string;
   type: VehicleType;
   status: VehicleStatus;
+  fuel: number;
+  cleanliness: number;
 };
 
 type RouteOption = {
@@ -102,7 +105,13 @@ export function LiveIncidentsPanel({
   const [mobileBoardOpen, setMobileBoardOpen] = useState(false);
 
   const availableVehicles = useMemo(
-    () => vehicles.filter((vehicle) => vehicle.status === "AVAILABLE"),
+    () =>
+      vehicles.filter(
+        (vehicle) =>
+          vehicle.status === "AVAILABLE" &&
+          vehicle.fuel >= 8 &&
+          vehicle.cleanliness >= 8,
+      ),
     [vehicles],
   );
 
@@ -210,7 +219,24 @@ export function LiveIncidentsPanel({
     return "bg-sky-500/18";
   };
 
-  if (newIncidents.length === 0 && incomingDeliveries.length === 0) {
+  const formatTimer = (seconds: number) => {
+    const safeSeconds = Math.max(0, Math.round(seconds));
+    return `${Math.floor(safeSeconds / 60)}:${String(safeSeconds % 60).padStart(2, "0")}`;
+  };
+
+  const incidentStatusLabel = (incident: IncidentLike) => {
+    if (incident.assignedVehicleIds.length === 0) return "Wait for assignment";
+    if (incident.status === "AWAITING_RETURN") return "Returning to base";
+    const progress = missionProgress(incident);
+    if (progress.mission > 0 && progress.mission < 1) return "Being processed";
+    return "Emergency services are on their way";
+  };
+
+  const activeBoardIncidents = activeIncidents
+    .map((incident) => ({ incident, progress: missionProgress(incident) }))
+    .sort((a, b) => a.incident.id - b.incident.id);
+
+  if (newIncidents.length === 0 && incomingDeliveries.length === 0 && activeBoardIncidents.length === 0) {
     return null;
   }
   
@@ -224,6 +250,87 @@ export function LiveIncidentsPanel({
       >
         {mobileBoardOpen ? "Hide popups" : `Popups (${newIncidents.length})`}
       </Button>
+
+      <aside className="pointer-events-auto absolute right-3 top-20 z-30 hidden w-[360px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-700/70 bg-slate-950/90 p-3 shadow-2xl backdrop-blur-md lg:block">
+        <div className="mb-3 flex items-center justify-between border-b border-slate-700/70 pb-2">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-wide text-sky-300">Global Rescue Dispatch Board</p>
+            <h2 className="text-sm font-semibold text-slate-100">Live tasks</h2>
+          </div>
+          <div className="flex overflow-hidden rounded-t-md border border-slate-800 bg-slate-900">
+            <div className="h-1.5 w-12 bg-sky-500" />
+            <div className="h-1.5 w-12 bg-rose-500" />
+          </div>
+        </div>
+
+        <div className="max-h-[62vh] space-y-2 overflow-y-auto pr-1">
+          {activeBoardIncidents.map(({ incident, progress }) => {
+            const assignedVehicles = incident.assignedVehicleIds
+              .map((id) => vehicles.find((vehicle) => vehicle.id === id))
+              .filter((vehicle): vehicle is VehicleLike => Boolean(vehicle));
+            const stage = incident.stages[incident.currentStage];
+            return (
+              <button
+                key={`board-${incident.id}`}
+                type="button"
+                onClick={() => {
+                  setDispatchIncidentId(incident.id);
+                  setSelectedVehicleTypes([]);
+                  setRouteChoices({});
+                }}
+                className={`w-full rounded-xl border p-3 text-left transition ${
+                  focusedIncidentId === incident.id
+                    ? "border-sky-400 bg-sky-950/50"
+                    : "border-slate-800 bg-slate-900/80 hover:border-slate-600"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className={`text-[11px] font-bold ${incident.category === "FIRE" ? "text-rose-300" : incident.category === "EMS" ? "text-emerald-300" : "text-sky-300"}`}>
+                      {incidentStatusLabel(incident)}
+                    </p>
+                    <h3 className="mt-0.5 text-sm font-black leading-tight text-slate-50">{incident.title}</h3>
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-slate-400">
+                      <MapPin className="h-3 w-3" /> Stage: {stage?.label ?? "Response"}
+                    </p>
+                  </div>
+                  <span className="rounded-md bg-slate-950 px-2 py-1 text-xs font-bold text-slate-100">
+                    <Clock className="mr-1 inline h-3 w-3" />
+                    {formatTimer((1 - progress.overall) * 240)}
+                  </span>
+                </div>
+                <div className="mt-3 h-2 rounded bg-slate-950">
+                  <div className={`h-2 rounded ${progress.colorClass}`} style={{ width: `${Math.round(progress.overall * 100)}%` }} />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-300">
+                  <span><Users className="mr-1 inline h-3 w-3" />{assignedVehicles.length} assigned</span>
+                  <span>{Math.round(progress.overall * 100)}% mission progress</span>
+                </div>
+                {assignedVehicles.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    {assignedVehicles.slice(0, 2).map((vehicle) => (
+                      <div key={vehicle.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/70 px-2 py-1 text-[11px]">
+                        <span className="font-semibold text-slate-200">{vehicle.name}</span>
+                        <span className="text-slate-400">{vehicle.status}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+
+          {newIncidents.length === 0 && (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <p className="text-sm font-bold text-slate-100">Call incoming (waiting for available emergency dispatcher)</p>
+              <div className="mt-2 flex items-center justify-between rounded-lg bg-slate-950 px-3 py-2 text-xs text-slate-300">
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" /> Unknown</span>
+                <span className="font-bold"><Clock className="mr-1 inline h-3 w-3" />4:00</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
 
       <div className={`absolute bottom-2 left-2 right-2 z-30 max-h-[42vh] space-y-1.5 overflow-y-auto rounded-xl border border-slate-700/70 bg-slate-950/85 p-2 shadow-2xl backdrop-blur-sm ${mobileBoardOpen ? "block" : "hidden"} md:hidden`}>
       <div className="flex items-center justify-between">
@@ -351,7 +458,7 @@ export function LiveIncidentsPanel({
                     >
                       <span className="flex items-center gap-1.5">
                         <Truck className="h-3.5 w-3.5" />
-                        {vehicleType} • {availableCount} available
+                        {vehicleType} • {availableCount} available and ready
                       </span>
                       <span className="text-[10px] text-slate-300">Need {requiredCount}</span>
                       {selected ? <Check className="h-3.5 w-3.5" /> : null}
@@ -369,8 +476,12 @@ export function LiveIncidentsPanel({
                   if (!fastestRoute) return null;
                   return (
                     <div key={vehicle.id} className="rounded border border-slate-700 p-2 text-[10px] text-slate-300">
-                      <p className="font-medium text-slate-100">Fastest route for {vehicle.name}</p>
+                      <p className="font-medium text-slate-100">Assign task to {vehicle.name}</p>
                       <p>{fastestRoute.distanceKm.toFixed(1)} km • {fastestRoute.etaSeconds}s</p>
+                      <div className="mt-1 flex gap-3 text-slate-400">
+                        <span><Fuel className="mr-1 inline h-3 w-3" />{vehicle.fuel}%</span>
+                        <span><Sparkles className="mr-1 inline h-3 w-3" />{vehicle.cleanliness}%</span>
+                      </div>
                     </div>
                   );
                 });
@@ -396,7 +507,7 @@ export function LiveIncidentsPanel({
                 setSelectedVehicleTypes([]);
               }}
             >
-              Dispatch selected ({selectedVehicleTypes.length})
+              Assign task ({selectedVehicleTypes.length})
             </Button>
           </div>
         </div>
