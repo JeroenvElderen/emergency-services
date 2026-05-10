@@ -80,6 +80,8 @@ type Vehicle = {
   incidentId: number | null;
   route: [number, number][];
   speedFactor: number;
+  fuel: number;
+  cleanliness: number;
 };
 
 type IncidentStage = {
@@ -269,6 +271,17 @@ type EuCountry = {
 function createVehicleSpeedFactor() {
   const { min, max } = VEHICLE_SPEED_VARIANCE;
   return Number((min + Math.random() * (max - min)).toFixed(2));
+}
+
+function createVehicleReadiness() {
+  return {
+    fuel: rand(68, 100),
+    cleanliness: rand(62, 100),
+  };
+}
+
+function clampReadiness(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
 }
 
 function resolveVehicleSpeedKmh(
@@ -725,6 +738,8 @@ function loadGame(): GameState {
         route: Array.isArray(vehicle.route) ? vehicle.route : [],
         speedFactor:
           typeof vehicle.speedFactor === "number" ? vehicle.speedFactor : 1,
+        fuel: clampReadiness(vehicle.fuel ?? 100),
+        cleanliness: clampReadiness(vehicle.cleanliness ?? 100),
       })),
     };
   } catch {
@@ -1377,6 +1392,7 @@ export default function Page() {
                 incidentId: null,
                 route: [],
                 speedFactor: createVehicleSpeedFactor(),
+                ...createVehicleReadiness(),
               };
             },
           );
@@ -1586,6 +1602,8 @@ export default function Page() {
       attributionControl: false,
     });
 
+    const vehicleMarkers = vehicleMarkerRefs.current;
+
     const apply3dTerrain = () => {
       if (!mapRef.current) return;
       if (!mapRef.current.getSource("mapbox-dem")) {
@@ -1632,11 +1650,11 @@ export default function Page() {
       stationMarkerRefs.current.forEach((marker) => marker.remove());
       incidentMarkerRefs.current.forEach((marker) => marker.remove());
       realStationMarkerRefs.current.forEach((marker) => marker.remove());
-      vehicleMarkerRefs.current.forEach((marker) => marker.remove());
+      vehicleMarkers.forEach((marker) => marker.remove());
       stationMarkerRefs.current = [];
       incidentMarkerRefs.current = [];
       realStationMarkerRefs.current = [];
-      vehicleMarkerRefs.current.clear();
+      vehicleMarkers.clear();
       mapRef.current?.remove();
       mapRef.current = null;
     };
@@ -1653,7 +1671,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!isSelectingRealStation) return;
-    loadRealStations();
+    void Promise.resolve().then(() => loadRealStations());
   }, [isSelectingRealStation, loadRealStations]);
 
   useEffect(() => {
@@ -2017,6 +2035,8 @@ export default function Page() {
     realStations,
     selectedBuild,
     deliveries,
+    game.activeCountryCode,
+    isWithinCountryBounds,
   ]);
 
   useEffect(() => {
@@ -2148,6 +2168,8 @@ export default function Page() {
         !vehicle ||
         !incident ||
         vehicle.status !== "AVAILABLE" ||
+        vehicle.fuel < 8 ||
+        vehicle.cleanliness < 8 ||
         current.credits < DISPATCH_COST ||
         incident.assignedVehicleIds.includes(vehicleId)
       ) {
@@ -2175,6 +2197,8 @@ export default function Page() {
                         [dispatchOrigin.lng, dispatchOrigin.lat],
                         [incident.lng, incident.lat],
                       ],
+                fuel: clampReadiness(v.fuel - Math.max(6, Math.round(km * 2.5))),
+                cleanliness: clampReadiness(v.cleanliness - rand(3, 9)),
               }
             : v,
         ),
@@ -2291,6 +2315,7 @@ export default function Page() {
         incidentId: null,
         route: deliveryRoute,
         speedFactor: createVehicleSpeedFactor(),
+        ...createVehicleReadiness(),
       };
 
       return {
@@ -2315,7 +2340,15 @@ export default function Page() {
           ...current,
           vehicles: current.vehicles.map((vehicle) =>
             vehicle.id === purchasedVehicleId && vehicle.status === "RETURNING"
-              ? { ...vehicle, status: "AVAILABLE", eta: 0, totalEta: 0, route: [] }
+              ? {
+                  ...vehicle,
+                  status: "AVAILABLE",
+                  eta: 0,
+                  totalEta: 0,
+                  route: [],
+                  fuel: clampReadiness(vehicle.fuel + 45),
+                  cleanliness: clampReadiness(vehicle.cleanliness + 30),
+                }
               : vehicle,
           ),
           log: [
@@ -2456,6 +2489,8 @@ export default function Page() {
               eta: 0,
               totalEta: 0,
               route: [],
+              fuel: clampReadiness(vehicle.fuel + 42),
+              cleanliness: clampReadiness(vehicle.cleanliness + 28),
             };
           }
 
@@ -3128,9 +3163,25 @@ export default function Page() {
                   .map((vehicle) => (
                     <div
                       key={vehicle.id}
-                      className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1"
+                      className="rounded-lg border border-slate-700 bg-slate-900/80 p-2"
                     >
-                      {vehicle.name} • {vehicle.status}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-100">{vehicle.name}</span>
+                        <span className="rounded bg-slate-700/80 px-1.5 py-0.5 text-[10px] uppercase text-slate-200">{vehicle.status}</span>
+                      </div>
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        Crew {VEHICLE_TYPES[vehicle.type].crew}/{VEHICLE_TYPES[vehicle.type].crew} • {VEHICLE_TYPES[vehicle.type].label}
+                      </p>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] text-slate-300">
+                        <div>
+                          <div className="mb-1 flex justify-between"><span>Fuel</span><span>{vehicle.fuel}%</span></div>
+                          <div className="h-2 rounded bg-slate-950"><div className="h-2 rounded bg-amber-400" style={{ width: `${vehicle.fuel}%` }} /></div>
+                        </div>
+                        <div>
+                          <div className="mb-1 flex justify-between"><span>Clean</span><span>{vehicle.cleanliness}%</span></div>
+                          <div className="h-2 rounded bg-slate-950"><div className="h-2 rounded bg-sky-400" style={{ width: `${vehicle.cleanliness}%` }} /></div>
+                        </div>
+                      </div>
                     </div>
                   ))}
               </div>
