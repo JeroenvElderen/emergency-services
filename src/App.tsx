@@ -5,12 +5,15 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import {
   Ambulance,
+  Beaker,
   Building2,
   CarFront,
+  CheckCircle2,
   Coins,
   Flame,
   Globe2,
   House,
+  LockKeyhole,
   Shield,
   Siren,
   Truck,
@@ -188,6 +191,8 @@ type GameState = {
   weatherTimer: number;
   missionDailySpawns: Record<string, string>;
   nextMissionSpawnAt: number;
+  researchPoints: number;
+  unlockedResearch: string[];
 };
 
 type IncomeToast = {
@@ -202,7 +207,16 @@ type VehicleOrderModalState = {
 
 type MapVisualStyle = "DARK_3D" | "SATELLITE_3D";
 
-// MissionChief-like economy tuning (lower vehicle costs, no dispatch/payroll fees).
+type ResearchNode = {
+  id: string;
+  title: string;
+  description: string;
+  cost: number;
+  unlocksVehicleTypes?: VehicleType[];
+  benefit: string;
+};
+
+// Global Rescue-style economy tuning (lower vehicle costs, no dispatch/payroll fees).
 const STATION_COST = 100000;
 const DISPATCH_COST = 0;
 const UPGRADE_BASE_COST = 20000;
@@ -233,6 +247,32 @@ const WEATHER_EFFECTS: Record<
 };
 const MAPBOX_DIRECTIONS_BASE_URL =
   "https://api.mapbox.com/directions/v5/mapbox/driving";
+const RESEARCH_TREE: ResearchNode[] = [
+  {
+    id: "aerial-ops",
+    title: "Aerial Access Operations",
+    description: "Unlock ladder units for high-rise fires and elevated rescues.",
+    cost: 4,
+    unlocksVehicleTypes: ["LADDER"],
+    benefit: "Ladder vehicle purchasing",
+  },
+  {
+    id: "technical-rescue",
+    title: "Technical Rescue Wing",
+    description: "Formalize rescue-company procedures for crashes, collapses, and complex EMS support.",
+    cost: 5,
+    unlocksVehicleTypes: ["RESCUE"],
+    benefit: "Advanced rescue readiness",
+  },
+  {
+    id: "tactical-command",
+    title: "Tactical Command Program",
+    description: "Open the SWAT planning track for barricades, warrants, and high-risk scenes.",
+    cost: 6,
+    unlocksVehicleTypes: ["SWAT"],
+    benefit: "SWAT vehicle purchasing",
+  },
+];
 const TERRAIN_EXAGGERATION: Record<MapVisualStyle, number> = {
   SATELLITE_3D: 1.2,
   DARK_3D: 1.35,
@@ -428,12 +468,14 @@ const initialState: GameState = {
   stations: [],
   vehicles: [],
   incidents: [],
-  log: ["Place your first building on the map to start the game."],
+  log: ["Choose an operating region, place your Global Rescue headquarters, then answer your first call."],
   reputation: 50,
   weather: "CLEAR",
   weatherTimer: WEATHER_INTERVAL_SECONDS,
   missionDailySpawns: {},
   nextMissionSpawnAt: Date.now() + 5 * 60 * 1000,
+  researchPoints: 0,
+  unlockedResearch: [],
 };
 
 const rand = (min: number, max: number) =>
@@ -705,6 +747,10 @@ function loadGame(): GameState {
       reputation: Math.max(0, Math.min(100, parsed.reputation ?? 50)),
       weather: parsed.weather ?? "CLEAR",
       weatherTimer: parsed.weatherTimer ?? WEATHER_INTERVAL_SECONDS,
+      researchPoints: parsed.researchPoints ?? 0,
+      unlockedResearch: Array.isArray(parsed.unlockedResearch)
+        ? parsed.unlockedResearch
+        : [],
       missionDailySpawns: parsed.missionDailySpawns ?? {},
       nextMissionSpawnAt:
         typeof parsed.nextMissionSpawnAt === "number"
@@ -939,6 +985,7 @@ export default function Page() {
   );
   const [selectedBuild, setSelectedBuild] = useState<StationType>("FIRE");
   const [buildPickerOpen, setBuildPickerOpen] = useState(false);
+  const [researchOpen, setResearchOpen] = useState(false);
   const [isSelectingRealStation, setIsSelectingRealStation] = useState(false);
   const [realStations, setRealStations] = useState<RealStationSite[]>([]);
   const [isLoadingRealStations, setIsLoadingRealStations] = useState(false);
@@ -1856,28 +1903,74 @@ export default function Page() {
         return;
       }
 
-      const el = document.createElement("button");
-      el.className =
-        "flex h-7 w-7 items-center justify-center rounded-full border-2 border-slate-950 text-white shadow-lg";
-      el.style.backgroundColor = markerStyle.background;
-      el.title = `${incident.title} (${markerStyle.label})`;
-      el.innerHTML =
+      const stage = incident.stages[incident.currentStage];
+      const progress = missionProgress(incident);
+      const requiredSummary = Object.entries(
+        requirementCounts(stage?.required ?? []),
+      )
+        .map(
+          ([type, count]) =>
+            `${count} ${VEHICLE_TYPES[type as VehicleType].label}`,
+        )
+        .join(" · ");
+      const categoryIcon =
         incident.category === "FIRE"
           ? "🔥"
           : incident.category === "EMS"
             ? "🚑"
             : "🚓";
+      const categoryTone =
+        incident.category === "FIRE"
+          ? "#fb7185"
+          : incident.category === "EMS"
+            ? "#34d399"
+            : "#38bdf8";
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = "group flex w-[220px] -translate-y-2 items-stretch overflow-hidden rounded-xl border border-slate-950/80 bg-slate-950/95 text-left text-slate-100 shadow-2xl shadow-slate-950/50 transition hover:scale-[1.02] hover:border-cyan-300/80";
+      el.title = `${incident.title} (${markerStyle.label})`;
+      el.style.borderLeft = `5px solid ${categoryTone}`;
+
+      const icon = document.createElement("div");
+      icon.className = "flex w-10 shrink-0 items-center justify-center text-lg";
+      icon.style.backgroundColor = markerStyle.background;
+      icon.textContent = categoryIcon;
+
+      const content = document.createElement("div");
+      content.className = "min-w-0 flex-1 px-2 py-1.5";
+
+      const title = document.createElement("div");
+      title.className = "truncate text-xs font-black leading-tight text-white";
+      title.textContent = incident.title;
+
+      const meta = document.createElement("div");
+      meta.className = "mt-0.5 truncate text-[10px] font-semibold uppercase tracking-wide text-cyan-100/90";
+      meta.textContent = `${markerStyle.label} · ${stage?.label ?? "Response"}`;
+
+      const details = document.createElement("div");
+      details.className = "mt-0.5 truncate text-[10px] text-slate-300";
+      details.textContent = `Need ${requiredSummary || "any response"} · +${incident.reward}`;
+
+      const progressTrack = document.createElement("div");
+      progressTrack.className = "mt-1 h-1 overflow-hidden rounded-full bg-slate-800";
+      const progressBar = document.createElement("div");
+      progressBar.className = "h-full rounded-full bg-cyan-400";
+      progressBar.style.width = `${Math.round(progress.overall * 100)}%`;
+      progressTrack.append(progressBar);
+
+      content.append(title, meta, details, progressTrack);
+      el.append(icon, content);
       el.onclick = () => {
         setFocusedIncidentId(incident.id);
         mapRef.current?.flyTo({
           center: [incident.lng, incident.lat],
-          zoom: Math.max(mapRef.current.getZoom(), 12),
+          zoom: Math.max(mapRef.current.getZoom(), 13),
           essential: true,
         });
       };
 
       incidentMarkerRefs.current.push(
-        new mapboxgl.Marker({ element: el, anchor: "center" })
+        new mapboxgl.Marker({ element: el, anchor: "bottom" })
           .setLngLat([incident.lng, incident.lat])
           .addTo(mapRef.current!),
       );
@@ -2037,6 +2130,7 @@ export default function Page() {
     deliveries,
     game.activeCountryCode,
     isWithinCountryBounds,
+    missionProgress,
   ]);
 
   useEffect(() => {
@@ -2440,6 +2534,23 @@ export default function Page() {
     });
   }
 
+  function unlockResearchNode(node: ResearchNode) {
+    setGame((current) => {
+      if (current.unlockedResearch.includes(node.id)) return current;
+      if (current.researchPoints < node.cost) return current;
+
+      return {
+        ...current,
+        researchPoints: current.researchPoints - node.cost,
+        unlockedResearch: [...current.unlockedResearch, node.id],
+        log: [
+          `Research complete: ${node.title}. ${node.benefit} is now active.`,
+          ...current.log,
+        ].slice(0, 10),
+      };
+    });
+  }
+
   function resetGame() {
     localStorage.removeItem("emergency-services-save-v2");
     localStorage.removeItem("emergency-services-deliveries-v1");
@@ -2695,10 +2806,16 @@ export default function Page() {
         const nextMissionDailySpawns = { ...current.missionDailySpawns };
         let nextMissionSpawnAt = current.nextMissionSpawnAt;
 
+        const completedDelta =
+          nextIncidents.filter((i) => i.status === "COMPLETE").length -
+          current.incidents.filter((i) => i.status === "COMPLETE").length;
         if (creditsEarned > 0) {
-          nextResolvedCount +=
-            nextIncidents.filter((i) => i.status === "COMPLETE").length -
-            current.incidents.filter((i) => i.status === "COMPLETE").length;
+          nextResolvedCount += completedDelta;
+        }
+        const researchEarned = Math.max(0, completedDelta) * 1;
+        const nextResearchPoints = current.researchPoints + researchEarned;
+        if (researchEarned > 0) {
+          progressNotes.push(`Command analysis gained +${researchEarned} research point${researchEarned > 1 ? "s" : ""}.`);
         }
 
         if (shouldSpawn) {
@@ -2818,6 +2935,7 @@ export default function Page() {
           credits: nextCredits,
           resolvedCount: nextResolvedCount,
           reputation: nextReputation,
+          researchPoints: nextResearchPoints,
           weather: nextWeather,
           weatherTimer: weatherChanged ? WEATHER_INTERVAL_SECONDS : nextWeatherTimer,
           missionDailySpawns: nextMissionDailySpawns,
@@ -2864,6 +2982,17 @@ export default function Page() {
     null;
   const trafficState = getRushHourModifier();
   const weatherState = WEATHER_EFFECTS[game.weather];
+  const unlockedVehicleTypes = new Set(
+    RESEARCH_TREE.flatMap((node) =>
+      game.unlockedResearch.includes(node.id) ? (node.unlocksVehicleTypes ?? []) : [],
+    ),
+  );
+  const vehicleTypeIsResearchLocked = (type: VehicleType) =>
+    RESEARCH_TREE.some((node) => node.unlocksVehicleTypes?.includes(type)) &&
+    !unlockedVehicleTypes.has(type);
+  const vehicleTypeIsPurchasable = (type: VehicleType) =>
+    (!disabledVehicleTypes.includes(type) || unlockedVehicleTypes.has(type)) &&
+    !vehicleTypeIsResearchLocked(type);
 
   return (
     <>
@@ -2964,7 +3093,75 @@ export default function Page() {
         </div>
       )}
 
-      <div className="absolute left-2 right-2 top-2 z-30 flex max-w-[min(96vw,820px)] flex-wrap items-center gap-1 rounded-xl border border-slate-700/70 bg-slate-950/88 px-2 py-1.5 text-[11px] shadow-2xl backdrop-blur-sm [&_button]:h-6 [&_button]:px-2 sm:left-3 sm:right-auto sm:top-3 sm:gap-2 sm:px-2.5 sm:py-2 sm:text-sm sm:[&_button]:h-7">
+      {researchOpen && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+          <div className="w-full max-w-3xl rounded-2xl border border-cyan-500/40 bg-slate-950/95 p-4 shadow-2xl shadow-cyan-950/40">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-1 text-xs font-bold uppercase tracking-[0.2em] text-cyan-300">
+                  <Beaker className="h-3.5 w-3.5" />
+                  Global Rescue Research Tree
+                </p>
+                <h2 className="mt-1 text-2xl font-black text-slate-50">Expand your emergency campus</h2>
+                <p className="mt-1 max-w-2xl text-xs text-slate-400">
+                  Resolve incidents to earn command-analysis points, then unlock new departments, vehicle classes, and specialist response doctrine.
+                </p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setResearchOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mb-3 rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-3 py-2 text-sm font-semibold text-cyan-100">
+              Available research points: {game.researchPoints}
+            </div>
+            <div className="grid gap-3 md:grid-cols-3">
+              {RESEARCH_TREE.map((node) => {
+                const unlocked = game.unlockedResearch.includes(node.id);
+                const canAfford = game.researchPoints >= node.cost;
+                return (
+                  <div
+                    key={node.id}
+                    className={`flex min-h-56 flex-col rounded-xl border p-3 ${
+                      unlocked
+                        ? "border-emerald-400/50 bg-emerald-400/10"
+                        : "border-slate-700 bg-slate-900/80"
+                    }`}
+                  >
+                    <div className="mb-3 flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-bold text-slate-100">{node.title}</h3>
+                      {unlocked ? (
+                        <CheckCircle2 className="h-5 w-5 text-emerald-300" />
+                      ) : (
+                        <LockKeyhole className="h-5 w-5 text-slate-500" />
+                      )}
+                    </div>
+                    <p className="flex-1 text-xs leading-5 text-slate-300">{node.description}</p>
+                    <p className="mt-3 rounded-lg bg-slate-950/70 px-2 py-1 text-[11px] text-slate-300">
+                      Benefit: {node.benefit}
+                    </p>
+                    <Button
+                      size="sm"
+                      className="mt-3 w-full"
+                      variant={unlocked ? "outline" : "default"}
+                      disabled={unlocked || !canAfford}
+                      onClick={() => unlockResearchNode(node)}
+                    >
+                      {unlocked ? "Unlocked" : `Research (${node.cost})`}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      <div className="absolute left-2 right-2 top-2 z-30 flex max-w-[min(96vw,980px)] flex-wrap items-center gap-1 rounded-xl border border-cyan-500/30 bg-slate-950/90 px-2 py-1.5 text-[11px] shadow-2xl shadow-cyan-950/30 backdrop-blur-sm [&_button]:h-6 [&_button]:px-2 sm:left-3 sm:right-auto sm:top-3 sm:gap-2 sm:px-2.5 sm:py-2 sm:text-sm sm:[&_button]:h-7">
+        <div className="mr-1 flex items-center gap-1 rounded-lg border border-cyan-400/25 bg-cyan-400/10 px-2 py-1 font-black uppercase tracking-wide text-cyan-100">
+          <Siren className="h-3.5 w-3.5 text-cyan-300" />
+          Global Rescue HQ
+        </div>
         <div className="relative">
           <Badge tone="good">
             <Coins className="mr-1 h-3 w-3" />
@@ -2980,6 +3177,7 @@ export default function Page() {
         </div>
         <Badge tone="blue">Weather {weatherState.label}</Badge>
         <Badge>Traffic {trafficState.label}</Badge>
+        <Badge tone="good">Research {game.researchPoints}</Badge>
         <Button
           size="sm"
           variant="outline"
@@ -2990,9 +3188,22 @@ export default function Page() {
             setBuildPickerOpen(false);
             setIsSelectingRealStation(false);
           }}
-          title="Manage countries"
+          title="Manage operating regions"
         >
           <Globe2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 px-2"
+          onClick={() => {
+            setResearchOpen(true);
+            setBuildPickerOpen(false);
+            setIsSelectingRealStation(false);
+          }}
+          title="Open research tree"
+        >
+          <Beaker className="h-3.5 w-3.5" />
         </Button>
         <Button
           size="sm"
@@ -3001,7 +3212,7 @@ export default function Page() {
             setBuildPickerOpen((open) => !open);
             setIsSelectingRealStation(false);
           }}
-          title="Buy building"
+          title="Build headquarters facilities"
         >
           +
         </Button>
@@ -3011,7 +3222,7 @@ export default function Page() {
         {buildPickerOpen && (
           <div className="absolute left-0 top-[calc(100%+0.5rem)] w-[280px] rounded-xl border border-slate-700 bg-slate-900/90 p-2">
             <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-300">
-              Buy building
+              Build HQ facility
             </p>
             <div className="flex flex-wrap gap-1.5">
               {(Object.keys(STATION_TYPES) as StationType[]).map((type) => {
@@ -3069,7 +3280,7 @@ export default function Page() {
                 setCountryPickerOpen(true);
               }}
             >
-              Change / buy country license
+              Change / buy operating-region license
             </Button>
             <p className="mt-1 text-[11px] text-slate-400">
               {game.stations.some((station) => station.type === selectedBuild)
@@ -3196,7 +3407,7 @@ export default function Page() {
                   const availableTypes = (Object.keys(VEHICLE_TYPES) as VehicleType[]).filter(
                     (type) =>
                       VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                      !disabledVehicleTypes.includes(type),
+                      vehicleTypeIsPurchasable(type),
                   );
                   setVehicleOrderModal({
                     stationId: selectedStation.id,
@@ -3213,7 +3424,7 @@ export default function Page() {
                   .filter(
                     (type) =>
                       VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                      !disabledVehicleTypes.includes(type),
+                      vehicleTypeIsPurchasable(type),
                   )
                   .map((type) => {
                     const config = VEHICLE_TYPES[type];
@@ -3263,7 +3474,7 @@ export default function Page() {
                 .filter(
                   (type) =>
                     VEHICLE_TYPES[type].stationType === selectedStation.type &&
-                    !disabledVehicleTypes.includes(type),
+                    vehicleTypeIsPurchasable(type),
                 )
                 .map((type) => (
                   <div key={`order-${type}`} className="flex items-center justify-between gap-2">

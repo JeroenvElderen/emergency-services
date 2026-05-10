@@ -1,4 +1,6 @@
-# Emergency Services
+# Global Rescue HQ
+
+A Global Rescue-style emergency management prototype: build an operating headquarters on real map data, buy and dispatch vehicles, rotate staff, complete live incidents, and unlock specialist response programs through a lightweight research tree.
 
 ## Mission JSON guide
 
